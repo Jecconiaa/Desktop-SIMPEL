@@ -1,0 +1,9 @@
+.vs/
+node_modules/
+**/node_modules/
+bin/
+obj/
+.next/
+dist/
+build/
+*.exe

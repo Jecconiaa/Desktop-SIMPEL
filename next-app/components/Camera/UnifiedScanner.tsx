@@ -1,143 +1,122 @@
 ﻿"use client";
 
-import { useEffect, useRef, useState } from "react";
-import * as faceapi from "face-api.js";
-import jsQR from "jsqr";
+import { useEffect, useRef, useState } from "react"; //hooks
+import * as faceapi from "face-api.js"; // library face detection
+import jsQR from "jsqr"; // library QR code scanning
 
 interface UnifiedScannerProps {
-    onQrScan: (data: string) => void;
-    onFaceDetect: (count: number) => void; // Opsional: kasih tau ada berapa muka
+    onQrScan: (data: string) => void; // callback saat QR code terdeteksi
+    onFaceDetect: (count: number) => void; // callback saat wajah terdeteksi
 }
 
-export default function UnifiedScanner({ onQrScan, onFaceDetect }: UnifiedScannerProps) {
-    const videoRef = useRef<HTMLVideoElement>(null);
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const lastQrRef = useRef<string | null>(null); // Biar gak spam scan QR yg sama
+export default function UnifiedScanner({ onQrScan, onFaceDetect }: UnifiedScannerProps) { // komponen utama
+    const videoRef = useRef<HTMLVideoElement>(null); // referensi elemen video
+    const faceCanvasRef = useRef<HTMLCanvasElement>(null); // referensi kanvas untuk face detection
+    const qrCanvasRef = useRef<HTMLCanvasElement>(null); // referensi kanvas untuk QR scanning
 
+    const loopRef = useRef<NodeJS.Timeout | null>(null); // referensi untuk loop utama
+    const lastQrRef = useRef<string | null>(null); // menyimpan data QR terakhir yang terdeteksi
+    const [isLoading, setIsLoading] = useState(true); // state loading
+
+    // 1. LOAD MODEL + START CAMERA
     useEffect(() => {
-        let stream: MediaStream | null = null;
-        let isMounted = true;
 
-        const startSystem = async () => {
+        let stream: MediaStream | null = null; // menyimpan stream kamera
+        const start = async () => { // fungsi untuk memulai kamera dan load model
             try {
-                // 1. Load Model Face API
-                console.log("Loading AI Models...");
-                await faceapi.nets.tinyFaceDetector.loadFromUri("/Models");
+                await faceapi.nets.tinyFaceDetector.loadFromUri("/Models"); // load model face detection
 
-                // 2. Nyalain Kamera
-                stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: "user", width: 640, height: 480 }
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "user", width: 640, height: 480 } // konfigurasi kamera depan
                 });
 
-                if (isMounted && videoRef.current) {
-                    videoRef.current.srcObject = stream;
-                    videoRef.current.setAttribute("playsinline", "true");
-                    setIsLoading(false);
+                if (videoRef.current) { // kalo video siap
+                    videoRef.current.srcObject = stream;  // set stream ke elemen video
+                    setIsLoading(false); // set loading false
                 }
-            } catch (err) {
-                console.error("Error starting scanner:", err);
+            } catch (e) {
+                console.error("Camera Error:", e); // tangani error kamera
                 setIsLoading(false);
             }
         };
 
-        startSystem();
+        start(); // jalanin fungsi diatas
 
-        return () => {
-            isMounted = false;
-            if (stream) stream.getTracks().forEach(track => track.stop());
+        return () => { // cleanup wktu user tinggalin halaman
+            if (loopRef.current) clearInterval(loopRef.current); 
+            if (stream) stream.getTracks().forEach((t) => t.stop());
         };
     }, []);
 
-    const handleVideoPlay = () => {
+    // 2. MAIN SCAN LOOP 
+    const handleVideoPlay = () => { // fungsi utama pas video mulai main
         const video = videoRef.current;
-        const canvas = canvasRef.current;
+        const faceCanvas = faceCanvasRef.current;
+        const qrCanvas = qrCanvasRef.current;
 
-        if (!video || !canvas) return;
+        if (!video || !faceCanvas || !qrCanvas) return; // kalo gada apa" ga jalanin
 
-        const displaySize = { width: video.videoWidth, height: video.videoHeight };
-        faceapi.matchDimensions(canvas, displaySize);
+        // Tunggu video siap
+        if (video.readyState < 2) {
+            setTimeout(handleVideoPlay, 100);
+            return;
+        }
 
-        // Bikin canvas virtual kecil buat proses QR
-        const qrCanvas = document.createElement("canvas");
+        const W = video.videoWidth;
+        const H = video.videoHeight;
+
+        // Fix ukuran canvas sesuai video
+        faceCanvas.width = W;
+        faceCanvas.height = H;
+
+        qrCanvas.width = W;
+        qrCanvas.height = H;
+
+        const faceCtx = faceCanvas.getContext("2d");
         const qrCtx = qrCanvas.getContext("2d", { willReadFrequently: true });
 
-        const renderLoop = setInterval(async () => {
-            if (!video || video.paused || video.ended) {
-                clearInterval(renderLoop);
-                return;
-            }
+        if (!faceCtx || !qrCtx) return; // kalo gada context ga jalanin
 
-            // Deteksi Wajah
-            const detections = await faceapi.detectAllFaces(
+        // clear loop sebelumnya
+        if (loopRef.current) clearInterval(loopRef.current);
+
+        // === Proses Scanning ===
+        loopRef.current = setInterval(async () => { // loop utama setiap 160ms
+            if (!video || video.paused || video.ended) return; // kalo video ga jalanin ga lanjut
+
+            // ===== FACE DETECTION =====
+            const detections = await faceapi.detectAllFaces( //manggil pendeteksian wajah
                 video,
                 new faceapi.TinyFaceDetectorOptions()
             );
 
-            // Kirim info jumlah muka ke parent
-            if (detections.length > 0) onFaceDetect(detections.length);
+            onFaceDetect(detections.length); // kirim jumlah wajah terdeteksi
 
-            // Deteksi QR
-            if (qrCtx) {
-                // Resize canvas virtual sesuaikan video
-                if (qrCanvas.width !== video.videoWidth) {
-                    qrCanvas.width = video.videoWidth;
-                    qrCanvas.height = video.videoHeight;
-                }
+            faceCtx.clearRect(0, 0, W, H);
+            const resized = faceapi.resizeResults(detections, { width: W, height: H });
+            faceapi.draw.drawDetections(faceCanvas, resized);
 
-                // Gambar frame video ke canvas virtual
-                qrCtx.drawImage(video, 0, 0);
-                const imageData = qrCtx.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
+            // ==== QR SCAN ====
+            qrCtx.clearRect(0, 0, W, H); 
+            qrCtx.drawImage(video, 0, 0, W, H); // gambar frame video ke kanvas
 
-                // Scan pixelnya
-                const code = jsQR(imageData.data, imageData.width, imageData.height, {
-                    inversionAttempts: "dontInvert",
-                });
+            const img = qrCtx.getImageData(0, 0, W, H); // ambil data gambar dari kanvas
+            const code = jsQR(img.data, W, H, { inversionAttempts: "dontInvert" }); // suruh jsqr scan 
 
-                // Kalau dapet QR
-                if (code) {
-                    // Cek duplikat biar gak spam
-                    if (code.data !== lastQrRef.current) {
-                        lastQrRef.current = code.data;
-                        onQrScan(code.data);
-
-                        // Efek getar kalo di HP (Haptic Feedback)
-                        if (navigator.vibrate) navigator.vibrate(200);
-                    }
-                }
+            if (code && code.data !== lastQrRef.current) { // kalo ada QR code baru
+                lastQrRef.current = code.data; // simpan data QR terakhir
+                onQrScan(code.data); // kirim isi QR code
             }
 
-            // --- JOB 3: DRAWING VISUALS (Overlay) ---
-            const ctx = canvas.getContext("2d");
-            if (ctx) {
-                // Bersihin canvas dulu
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-                // 1. Gambar Kotak Muka (Biru)
-                const resizedDetections = faceapi.resizeResults(detections, displaySize);
-                faceapi.draw.drawDetections(canvas, resizedDetections);
-
-                // 2. Gambar Kotak QR (Merah) - Kita gambar manual di canvas yg sama
-                // Kita re-scan ulang frame yg sama? Gak perlu, kita ambil koordinat dari JOB 2 tadi
-                // Tapi karena 'code' ada di scope lokal, kita scan ulang bentar di sini atau 
-                // idealnya state manajemen. Tapi biar simple, kita gambar indikator teks aja.
-
-                if (lastQrRef.current) {
-                    ctx.font = "bold 20px Courier New";
-                    ctx.fillStyle = "#00FF00";
-                    ctx.fillText("QR DETECTED ✅", 20, 50);
-                }
-            }
-
-        }, 150); // Loop setiap 150ms (Cukup cepet buat muka & QR)
+        }, 160); // **160ms = optimal**
     };
 
     return (
-        <div className="relative w-full h-full bg-black rounded-2xl overflow-hidden shadow-2xl border border-gray-700">
+        <div className="relative w-full h-full bg-black overflow-hidden">
             {isLoading && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center z-20 bg-gray-900 text-white">
                     <div className="w-10 h-10 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-                    <p className="animate-pulse">Loading...</p>
+                    <p className="animate-pulse text-xs">Loading...</p>
                 </div>
             )}
 
@@ -147,21 +126,16 @@ export default function UnifiedScanner({ onQrScan, onFaceDetect }: UnifiedScanne
                 muted
                 playsInline
                 onPlay={handleVideoPlay}
-                className="w-full h-full object-cover transform scale-x-[-1]" // Mirror effect
-            />
-            <canvas
-                ref={canvasRef}
-                className="absolute top-0 left-0 w-full h-full pointer-events-none transform scale-x-[-1]"
+                className="w-full h-full object-cover transform scale-x-[-1]"
             />
 
-            {/* UI Overlay statis */}
-            <div className="absolute bottom-4 left-0 w-full text-center pointer-events-none">
-                <div className="inline-block px-4 py-1 bg-black/50 rounded-full backdrop-blur-sm border border-white/10">
-                    <p className="text-xs text-cyan-400 tracking-widest font-mono">
-                        SCANNING: FACE & QR
-                    </p>
-                </div>
-            </div>
+            {/* FACE OVERLAY */}
+            <canvas
+                ref={faceCanvasRef}
+                className="absolute top-0 left-0 w-full h-full pointer-events-none transform scale-x-[-1]"/>
+
+            {/* QR CANVAS (hidden) */}
+            <canvas ref={qrCanvasRef} className="hidden" />
         </div>
     );
 }

@@ -1,4 +1,6 @@
-﻿"use client";
+﻿//components/Camera/UnifiedScanner.tsx
+
+"use client";
 
 import { useEffect, useRef, useState } from "react"; //hooks
 import * as faceapi from "face-api.js"; // library face detection

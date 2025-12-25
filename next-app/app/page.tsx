@@ -200,8 +200,8 @@ export default function Home() {
 
             <Header currentTime={currentTime} />
 
-            <main className="grid flex-1 grid-cols-12 gap-6 p-6">
-                <div className="col-span-12 flex h-full flex-col gap-4 lg:col-span-8">
+            <main className="grid grid-cols-12 gap-6 p-6 h-[calc(100vh-4rem)]">
+                <div className="col-span-12 flex h-full min-h-0 flex-col gap-4 lg:col-span-8">
                     <ScannerSection
                         key={scannerKey}
                         faceCount={faceCount}
@@ -213,7 +213,7 @@ export default function Home() {
                     />
                 </div>
 
-                <div className="col-span-12 h-full lg:col-span-4">
+                <div className="col-span-12 h-full min-h-0 lg:col-span-4">
                     <InfoPanel scannedData={scannedData} onReset={resetScan} isLoading={isLoading} />
                 </div>
             </main>

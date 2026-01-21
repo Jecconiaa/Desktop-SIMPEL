@@ -1,8 +1,10 @@
+//Components/Toast.tsx
+
 "use client";
 
 import React, { useEffect, useState } from 'react';
 
-type ToastType = 'success' | 'error' | 'info';
+type ToastType = 'success' | 'error' | 'info' | 'warning';
 
 interface ToastProps {
     message: string;
@@ -33,13 +35,15 @@ export const Toast: React.FC<ToastProps> = ({
     const bgColor = {
         success: 'bg-gradient-to-r from-green-500 to-emerald-600',
         error: 'bg-gradient-to-r from-red-500 to-rose-600',
-        info: 'bg-gradient-to-r from-blue-500 to-cyan-600'
+        info: 'bg-gradient-to-r from-blue-500 to-cyan-600',
+        warning: 'bg-gradient-to-r from-amber-500 to-orange-600' 
     }[type];
 
     const icon = {
         success: '✅',
         error: '❌',
-        info: 'ℹ️'
+        info: 'ℹ️',
+        warning: '⚠️'
     }[type];
 
     return (

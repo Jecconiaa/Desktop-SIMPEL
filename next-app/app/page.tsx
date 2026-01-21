@@ -1,11 +1,33 @@
-﻿// next-app/app/page.tsx
+﻿// next-app/app/page.tsx (FINAL VERSION)
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import UnifiedScanner from "@/components/Camera/UnifiedScanner";
 import { Toast } from "@/components/Toast";
+import { API_LINK } from "@/lib/constant";
+
 
 // --- TIPE DATA ---
+interface ScanResponse {
+    success?: boolean;
+    message?: string;
+    warning?: string;
+    data?: {
+        id?: number;
+        mhsId?: number;
+        qrCode?: string;
+        oldStatus?: string;
+        newStatus?: string;
+        semuaAlatHabis?: boolean;
+        alatHabisList?: string[];
+        alatBerhasil?: number;
+        alatGagal?: number;
+        borrowedAt?: string;
+        returnedAt?: string | null;
+        timestamp?: string;
+    };
+}
+
 interface BackendResponse {
     success?: boolean;
     message?: string;
@@ -19,6 +41,8 @@ interface BackendResponse {
             nama_alat: string;
             kondisi: string;
             quantity?: number;
+            EquipmentName?: string;
+            Quantity?: number;
         }>;
     };
 }
@@ -28,6 +52,9 @@ interface TransactionData {
     nim?: string;
     alat?: string[];
     raw?: string;
+    semuaAlatHabis?: boolean;
+    warning?: string;
+    mhsId?: number;
 }
 
 export default function Home() {
@@ -35,23 +62,79 @@ export default function Home() {
     const [faceCount, setFaceCount] = useState(0);
     const [currentTime, setCurrentTime] = useState<string>("");
     const [isLoading, setIsLoading] = useState(false);
+    const [isLoadingStep2, setIsLoadingStep2] = useState(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [scannerKey, setScannerKey] = useState(0);
+    const [autoResetTimer, setAutoResetTimer] = useState<NodeJS.Timeout | null>(null);
 
     // ⭐ STATE TOAST
     const [toast, setToast] = useState<{
         message: string;
-        type: 'success' | 'error' | 'info';
+        type: 'success' | 'error' | 'info' | 'warning';
     } | null>(null);
 
     const lastScanRef = useRef<number>(0);
 
     // ⭐ FUNGSI SHOW TOAST
-    const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' | 'warning' = 'info') => {
         setToast({ message, type });
         setTimeout(() => setToast(null), 3000);
-    };
+    }, []);
 
+    // ⭐ FUNGSI PLAY SOUND (OPTIONAL)
+    const playSound = useCallback((type: 'success' | 'error' | 'warning') => {
+        try {
+            const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+
+            // Frekuensi berbeda untuk tiap sound
+            switch (type) {
+                case 'success':
+                    oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+                    break;
+                case 'warning':
+                    oscillator.frequency.setValueAtTime(600, audioContext.currentTime);
+                    break;
+                case 'error':
+                    oscillator.frequency.setValueAtTime(400, audioContext.currentTime);
+                    break;
+            }
+
+            gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+
+            oscillator.start();
+            oscillator.stop(audioContext.currentTime + 0.5);
+        } catch (e) {
+            console.log("Sound not supported:", e);
+        }
+    }, []);
+
+    // ⭐ AUTO RESET SETELAH 10 DETIK
+    useEffect(() => {
+        if (scannedData && !isLoading && !errorMessage) {
+            // Clear timer sebelumnya
+            if (autoResetTimer) clearTimeout(autoResetTimer);
+
+            // Set timer baru
+            const timer = setTimeout(() => {
+                resetScan();
+                showToast("Auto-reset untuk scan berikutnya", "info");
+            }, 10000); // 10 detik
+
+            setAutoResetTimer(timer);
+
+            return () => {
+                if (timer) clearTimeout(timer);
+            };
+        }
+    }, [scannedData, isLoading, errorMessage]);
+
+    // ⭐ UPDATE WAKTU
     useEffect(() => {
         const updateTime = () =>
             setCurrentTime(new Date().toLocaleTimeString("id-ID"));
@@ -59,52 +142,108 @@ export default function Home() {
         return () => clearInterval(timer);
     }, []);
 
-    const handleQrFound = async (qrString: string) => {
+    // ⭐ HANDLE QR SCAN (MAIN LOGIC)
+    const handleQrFound = useCallback(async (qrString: string) => {
         const now = Date.now();
-        if (now - lastScanRef.current < 1500) return;
+        if (now - lastScanRef.current < 2000) { // ⭐ 2 DETIK DEBOUNCE
+            console.log("⏳ Skip scan - terlalu cepat");
+            return;
+        }
         lastScanRef.current = now;
 
         if (scannedData || isLoading || errorMessage) return;
 
         setIsLoading(true);
         setErrorMessage(null);
+        setScannedData(null);
 
         try {
             console.log("🔵 [STEP 1] Mengirim QR untuk update status...");
 
-            // ⭐ 1. POST untuk update status Booked → Diproses
+            // ⭐ 1. POST untuk update status
             const scanRes = await fetch(
-                `http://localhost:5234/api/borrowing/scan-qr/${encodeURIComponent(qrString)}`,
+                `${API_LINK}borrowing/scan-qr/${encodeURIComponent(qrString)}`,
                 {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
-                        "Accept": "application/json"
-                    }
+                        "Accept": "application/json",
+                    },
                 }
             );
 
-            const scanResult = await scanRes.json();
+            const scanResult: ScanResponse = await scanRes.json();
             console.log("🔵 [STEP 1 Result]:", scanResult);
+
+            // ⭐ VALIDASI RESPONSE
+            if (!scanResult) {
+                throw new Error("Invalid response from server");
+            }
+
+            if (!scanResult.data) {
+                throw new Error("Invalid response format from server");
+            }
+
+            if (!scanResult.data.newStatus) {
+                console.warn("⚠️ Server tidak mengembalikan newStatus");
+            }
 
             if (!scanRes.ok || !scanResult.success) {
                 throw new Error(scanResult.message || `Gagal scan QR. Status: ${scanRes.status}`);
             }
 
-            // ⭐ TOAST SUCCESS - MODERN!
-            showToast("✅ QR Berhasil di-Scan!", "success");
+            // ⭐ CEK APAKAH ALAT HABIS
+            if (scanResult.data.semuaAlatHabis) {
+                // KASUS: SEMUA ALAT HABIS
+                playSound('error');
+                showToast("⚠️ Semua alat habis! Booking selesai.", "error");
 
-            console.log("✅ [STEP 1 Success] Status berubah: Booked → Diproses");
+                const alatArray = scanResult.data.alatHabisList || [];
+                const fixedData: TransactionData = {
+                    nama: `Mahasiswa ID: ${scanResult.data.mhsId}`,
+                    nim: scanResult.data.mhsId?.toString() || "-",
+                    alat: alatArray,
+                    raw: qrString,
+                    semuaAlatHabis: true,
+                    mhsId: scanResult.data.mhsId
+                };
+
+                setScannedData(fixedData);
+
+                setErrorMessage(
+                    `❌ SEMUA ALAT HABIS!\n\n` +
+                    `Mahasiswa: ${scanResult.data.mhsId}\n` +
+                    `Alat yang habis:\n${alatArray.join(", ")}\n\n` +
+                    `Status: ${scanResult.data.newStatus}`
+                );
+
+                setIsLoading(false);
+                return;
+            }
+
+            // ⭐ TOAST SUCCESS - NORMAL CASE
+            const alatGagal = scanResult.data?.alatGagal || 0; // ⬅️ AMAN
+            if (alatGagal > 0) {
+                showToast(`✅ Scan berhasil! ${alatGagal} alat habis`, "info");
+            } else {
+                // SEMUA ALAT BERHASIL
+                playSound('success');
+                showToast("✅ QR Berhasil di-Scan!", "success");
+            }
+
+            console.log("✅ [STEP 1 Success] Status berubah:", scanResult.data.newStatus);
 
             // ⭐ 2. GET data untuk ditampilkan
             console.log("🔵 [STEP 2] Mengambil data transaksi...");
+            setIsLoadingStep2(true);
+
             const dataRes = await fetch(
-                `http://localhost:5234/api/borrowing/scan-data/${encodeURIComponent(qrString)}`,
+                `${API_LINK}borrowing/scan-data/${encodeURIComponent(qrString)}`,
                 {
                     method: "GET",
                     headers: {
-                        "Accept": "application/json"
-                    }
+                        "Accept": "application/json",
+                    },
                 }
             );
 
@@ -113,83 +252,99 @@ export default function Home() {
                 throw new Error(`Server Error: ${dataRes.status}`);
             }
 
-            const dataResult = await dataRes.json();
+            const dataResult: BackendResponse = await dataRes.json();
             console.log("🔵 [STEP 2 Result]:", dataResult);
 
             if (dataRes.ok && dataResult.success) {
-                // Process data alat
+                // ⭐ OPTIMASI GROUPING ALAT DENGAN REDUCE
                 let alatArray: string[] = [];
 
-                if (dataResult.data?.peminjaman_detail && Array.isArray(dataResult.data.peminjaman_detail)) {
-                    const alatMap = new Map<string, number>();
-
-                    dataResult.data.peminjaman_detail.forEach((item: any) => {
+                if (dataResult.data?.peminjaman_detail) {
+                    const alatMap = dataResult.data.peminjaman_detail.reduce((acc: Record<string, number>, item) => {
                         const nama = item.nama_alat || item.EquipmentName;
                         const qty = item.quantity || item.Quantity || 1;
 
                         if (nama) {
-                            alatMap.set(nama, (alatMap.get(nama) || 0) + qty);
+                            acc[nama] = (acc[nama] || 0) + qty;
                         }
-                    });
+                        return acc;
+                    }, {});
 
-                    alatArray = Array.from(alatMap.entries()).map(([nama, qty]) =>
+                    alatArray = Object.entries(alatMap).map(([nama, qty]) =>
                         qty > 1 ? `${nama} (${qty}x)` : nama
                     );
                 }
 
+                // ⭐ TAMBAHKAN INFO ALAT HABIS JIKA ADA
+                if (scanResult.data.alatHabisList && scanResult.data.alatHabisList.length > 0) {
+                    const habisItems = scanResult.data.alatHabisList.map((alat: string) => `❌ ${alat} (HABIS)`);
+                    alatArray = [...alatArray, ...habisItems];
+                }
+
                 const fixedData: TransactionData = {
-                    nama: dataResult.data?.mahasiswa?.nama || "Mahasiswa Ditemukan",
-                    nim: dataResult.data?.mahasiswa?.nim || "-",
+                    nama: dataResult.data?.mahasiswa?.nama || `Mahasiswa ${scanResult.data.mhsId}`,
+                    nim: dataResult.data?.mahasiswa?.nim || scanResult.data.mhsId?.toString() || "-",
                     alat: alatArray,
-                    raw: qrString
+                    raw: qrString,
+                    semuaAlatHabis: scanResult.data.semuaAlatHabis,
+                    mhsId: scanResult.data.mhsId
                 };
 
                 console.log("✅ [STEP 2 Success] Data untuk UI:", fixedData);
                 setScannedData(fixedData);
 
             } else {
-                setErrorMessage(dataResult.message || "Data tidak ditemukan setelah scan");
-                showToast("❌ Data tidak ditemukan", "error");
+                throw new Error(dataResult.message || "Data tidak ditemukan setelah scan");
             }
 
         } catch (err: any) {
             console.error("❌ Error total:", err);
 
             let errorMsg = err.message || "Gagal terhubung ke server";
+            let toastType: 'error' | 'warning' = 'error';
 
             if (errorMsg.includes("Booked")) {
                 errorMsg = `❌ Hanya booking dengan status "Booked" yang bisa di-scan.\n${errorMsg}`;
-                showToast("❌ Status bukan 'Booked'", "error");
+                toastType = 'warning';
             } else if (errorMsg.includes("404") || errorMsg.includes("tidak ditemukan")) {
                 errorMsg = "❌ QR Code tidak ditemukan. Pastikan booking sudah dibuat di mobile app.";
-                showToast("❌ QR tidak ditemukan", "error");
             } else if (errorMsg.includes("500")) {
                 errorMsg = "❌ Server error. Hubungi administrator.";
-                showToast("❌ Server error", "error");
-            } else {
-                showToast("❌ Gagal scan QR", "error");
+            } else if (errorMsg.includes("expired")) {
+                errorMsg = "❌ QR Code sudah expired. Booking otomatis dibatalkan.";
             }
 
+            playSound('error');
+            showToast(errorMsg.split('\n')[0], toastType);
             setErrorMessage(errorMsg);
+
         } finally {
             setIsLoading(false);
+            setIsLoadingStep2(false);
         }
-    };
+    }, [scannedData, isLoading, errorMessage, showToast, playSound]);
 
-    const handleFaceUpdate = (count: number) => {
+    const handleFaceUpdate = useCallback((count: number) => {
         setFaceCount(count);
-    };
+    }, []);
 
-    const resetScan = () => {
+    const resetScan = useCallback(() => {
         setScannedData(null);
         setErrorMessage(null);
+        setIsLoadingStep2(false);
         lastScanRef.current = 0;
+
+        if (autoResetTimer) {
+            clearTimeout(autoResetTimer);
+            setAutoResetTimer(null);
+        }
+
         setScannerKey(prev => prev + 1);
-    };
+    }, [autoResetTimer]);
 
     return (
         <div className="flex h-screen w-full flex-col overflow-hidden bg-[#0d1b2a] font-sans text-white">
-            {/* ⭐ RENDER TOAST DISINI */}
+            {/* ⭐ RENDER TOAST */}
             {toast && (
                 <Toast
                     message={toast.message}
@@ -210,18 +365,24 @@ export default function Home() {
                         isLoading={isLoading}
                         errorMessage={errorMessage}
                         onRetry={resetScan}
+                        isLoadingStep2={isLoadingStep2} // ⭐ PASS LOADING STEP 2
                     />
                 </div>
 
                 <div className="col-span-12 h-full min-h-0 lg:col-span-4">
-                    <InfoPanel scannedData={scannedData} onReset={resetScan} isLoading={isLoading} />
+                    <InfoPanel
+                        scannedData={scannedData}
+                        onReset={resetScan}
+                        isLoading={isLoading}
+                        isLoadingStep2={isLoadingStep2} // ⭐ PASS KE INFOPANEL
+                    />
                 </div>
             </main>
         </div>
     );
 }
 
-// --- SUB COMPONENTS (TETAP SAMA) ---
+// --- SUB COMPONENTS ---
 
 function Header({ currentTime }: { currentTime: string }) {
     return (
@@ -233,7 +394,9 @@ function Header({ currentTime }: { currentTime: string }) {
                     <p className="text-[10px] text-gray-400">Made By Kelompok 8 - TRPL</p>
                 </div>
             </div>
-            <div className="w-32 text-center font-mono text-2xl font-bold text-white">{currentTime || "--:--:--"}</div>
+            <div className="w-32 text-center font-mono text-2xl font-bold text-white">
+                {currentTime || "--:--:--"}
+            </div>
         </header>
     );
 }
@@ -243,6 +406,7 @@ function ScannerSection({
     onQrScan,
     onFaceDetect,
     isLoading,
+    isLoadingStep2,
     errorMessage,
     onRetry
 }: {
@@ -250,34 +414,59 @@ function ScannerSection({
     onQrScan: (data: string) => void;
     onFaceDetect: (count: number) => void;
     isLoading: boolean;
+    isLoadingStep2: boolean; // ⭐ PROPS BARU
     errorMessage: string | null;
     onRetry: () => void;
-    }) {
-
-
+}) {
     return (
         <div className={`relative flex-1 overflow-hidden rounded-3xl border-2 transition-all ${errorMessage ? 'border-red-500' : 'border-gray-700'} bg-black shadow-2xl shadow-cyan-900/10`}>
             <div className="absolute inset-0">
-                <UnifiedScanner onQrScan={onQrScan} onFaceDetect={onFaceDetect} />
+                <UnifiedScanner
+                    onQrScan={onQrScan}
+                    onFaceDetect={onFaceDetect}
+                />
             </div>
 
-            {/* OVERLAY LOADING */}
-            {isLoading && (
+            {/* OVERLAY LOADING STEP 1 */}
+            {isLoading && !isLoadingStep2 && (
                 <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm">
                     <div className="h-12 w-12 animate-spin rounded-full border-4 border-cyan-500 border-t-transparent"></div>
-                    <p className="mt-4 animate-pulse font-bold text-cyan-400">MEMVERIFIKASI DATA...</p>
+                    <p className="mt-4 animate-pulse font-bold text-cyan-400">MEMVERIFIKASI QR...</p>
+                </div>
+            )}
+
+            {/* OVERLAY LOADING STEP 2 */}
+            {isLoadingStep2 && (
+                <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm">
+                    <div className="h-10 w-10 animate-spin rounded-full border-4 border-blue-500 border-t-transparent"></div>
+                    <p className="mt-4 animate-pulse font-bold text-blue-400">MENGAMBIL DATA...</p>
                 </div>
             )}
 
             {/* OVERLAY ERROR */}
-            {errorMessage && (
+            {errorMessage && !isLoading && !isLoadingStep2 && (
                 <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/90 backdrop-blur-md animate-in fade-in space-y-4">
-                    <p className="font-bold text-red-500 text-xl text-center px-6 max-w-md">{errorMessage}</p>
+                    <div className={`text-6xl mb-2 ${errorMessage.includes('HABIS') ? 'text-orange-500' : 'text-red-500'}`}>
+                        {errorMessage.includes('HABIS') ? '⚠️' : '❌'}
+                    </div>
+
+                    <div className="max-w-md text-center">
+                        <h3 className="font-bold text-xl mb-2">
+                            {errorMessage.includes('HABIS') ? 'ALAT HABIS' : 'SCAN GAGAL'}
+                        </h3>
+                        <p className="text-gray-300 whitespace-pre-line text-sm">
+                            {errorMessage}
+                        </p>
+                    </div>
+
                     <button
                         onClick={onRetry}
-                        className="mt-4 px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold transition-all transform hover:scale-105 active:scale-95 shadow-lg shadow-red-900/50"
+                        className={`mt-4 px-6 py-3 rounded-xl font-bold transition-all transform hover:scale-105 active:scale-95 shadow-lg ${errorMessage.includes('HABIS')
+                            ? 'bg-orange-600 hover:bg-orange-700 shadow-orange-900/50'
+                            : 'bg-red-600 hover:bg-red-700 shadow-red-900/50'
+                            }`}
                     >
-                        ↻ SCAN ULANG
+                        {errorMessage.includes('HABIS') ? 'OK, LANJUT SCAN' : '↻ SCAN ULANG'}
                     </button>
                 </div>
             )}
@@ -295,17 +484,18 @@ function ScannerSection({
 function InfoPanel({
     scannedData,
     onReset,
-    isLoading
+    isLoading,
+    isLoadingStep2
 }: {
     scannedData: TransactionData | null;
     onReset: () => void;
     isLoading: boolean;
+    isLoadingStep2: boolean;
 }) {
     return (
-        // ⭐ PASTIKAN PARENT PUNYA h-full DAN overflow-hidden
         <div className="relative flex h-full flex-col rounded-3xl border border-gray-700 bg-[#162032] overflow-hidden">
             {!scannedData ? (
-                <WaitingState isLoading={isLoading} />
+                <WaitingState isLoading={isLoading} isLoadingStep2={isLoadingStep2} />
             ) : (
                 <ResultState data={scannedData} onReset={onReset} />
             )}
@@ -313,7 +503,7 @@ function InfoPanel({
     );
 }
 
-function WaitingState({ isLoading }: { isLoading: boolean }) {
+function WaitingState({ isLoading, isLoadingStep2 }: { isLoading: boolean; isLoadingStep2: boolean }) {
     return (
         <div className="flex flex-1 flex-col items-center justify-center space-y-6 p-8 text-center">
             {isLoading ? (
@@ -322,6 +512,14 @@ function WaitingState({ isLoading }: { isLoading: boolean }) {
                     <div>
                         <h2 className="mb-2 text-xl font-bold text-white">Sedang Memproses...</h2>
                         <p className="text-sm text-gray-400">Menghubungi server...</p>
+                    </div>
+                </>
+            ) : isLoadingStep2 ? (
+                <>
+                    <div className="flex h-40 w-40 animate-spin items-center justify-center rounded-full border-4 border-blue-500 border-t-transparent"></div>
+                    <div>
+                        <h2 className="mb-2 text-xl font-bold text-white">Mengambil Data...</h2>
+                        <p className="text-sm text-gray-400">Mengambil detail transaksi...</p>
                     </div>
                 </>
             ) : (
@@ -342,33 +540,38 @@ function WaitingState({ isLoading }: { isLoading: boolean }) {
 }
 
 function ResultState({ data, onReset }: { data: TransactionData; onReset: () => void; }) {
+    const hasAlatHabis = data.alat?.some(item => item.includes("(HABIS)")) || data.semuaAlatHabis;
+
     return (
-        // ⭐ SIMPLE: HANYA FLEX-COL H-FULL
         <div className="flex flex-col h-full">
             {/* HEADER */}
-            <div className="shrink-0 border-b border-white/10 bg-gradient-to-r from-cyan-900/50 to-blue-900/50 p-6">
+            <div className={`shrink-0 border-b border-white/10 p-6 ${hasAlatHabis ? 'bg-gradient-to-r from-orange-900/50 to-red-900/50' : 'bg-gradient-to-r from-cyan-900/50 to-blue-900/50'}`}>
                 <div className="flex items-center justify-between mb-2">
                     <div>
-                        <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-cyan-300">
+                        <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-gray-300">
                             DATA PEMINJAM
                         </p>
                         <h2 className="text-2xl font-bold leading-tight text-white">{data.nama}</h2>
                         <p className="mt-1 font-mono text-sm text-gray-300">{data.nim}</p>
                     </div>
-                    <div className="rounded-full bg-green-500/20 px-3 py-1">
-                        <span className="text-xs font-bold text-green-400">DIPROSES</span>
+                    <div className={`rounded-full px-3 py-1 ${hasAlatHabis ? 'bg-red-500/20' : 'bg-green-500/20'}`}>
+                        <span className={`text-xs font-bold ${hasAlatHabis ? 'text-red-400' : 'text-green-400'}`}>
+                            {hasAlatHabis ? 'SELESAI' : 'DIPROSES'}
+                        </span>
                     </div>
                 </div>
-                <div className="mt-3 rounded-lg bg-green-900/30 p-2">
-                    <p className="text-xs text-green-300">
-                        ✅ Status berhasil diupdate: <span className="font-bold">Booked → Diproses</span>
+
+                <div className={`mt-3 rounded-lg p-2 ${hasAlatHabis ? 'bg-red-900/30' : 'bg-green-900/30'}`}>
+                    <p className={`text-xs ${hasAlatHabis ? 'text-red-300' : 'text-green-300'}`}>
+                        {hasAlatHabis
+                            ? (data.semuaAlatHabis ? '⚠️ Semua alat habis. Booking selesai.' : '⚠️ Beberapa alat habis.')
+                            : '✅ Status berhasil diupdate: Booked → Diproses'}
                     </p>
                 </div>
             </div>
 
-            {/* ⭐ MIDDLE SECTION YANG BISA SCROLL */}
+            {/* MIDDLE SECTION */}
             <div className="flex-1 overflow-y-auto">
-                {/* HEADER DAFTAR ALAT */}
                 <div className="sticky top-0 z-10 px-6 pt-4 pb-2 border-b border-gray-800 bg-[#162032]">
                     <p className="text-xs font-bold uppercase tracking-wider text-gray-500">
                         DAFTAR ALAT ({data.alat?.length || 0})
@@ -379,16 +582,30 @@ function ResultState({ data, onReset }: { data: TransactionData; onReset: () => 
                 <div className="px-6 py-4">
                     <div className="space-y-3">
                         {data.alat && data.alat.length > 0 ? (
-                            data.alat.map((item, i) => (
-                                <div key={i} className="flex items-start gap-3 rounded-xl border border-gray-700/50 bg-[#0d1b2a] p-4">
-                                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-indigo-500/20 bg-indigo-500/10 text-lg text-indigo-400 mt-0.5">
-                                        📦
+                            data.alat.map((item, i) => {
+                                const isHabis = item.includes("(HABIS)");
+
+                                return (
+                                    <div
+                                        key={i}
+                                        className={`flex items-start gap-3 rounded-xl border p-4 ${isHabis
+                                            ? 'border-red-700/50 bg-red-900/10'
+                                            : 'border-gray-700/50 bg-[#0d1b2a]'
+                                            }`}
+                                    >
+                                        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border mt-0.5 ${isHabis
+                                            ? 'border-red-500/20 bg-red-500/10 text-red-400'
+                                            : 'border-indigo-500/20 bg-indigo-500/10 text-indigo-400'
+                                            }`}>
+                                            {isHabis ? '❌' : '📦'}
+                                        </div>
+                                        <span className={`block text-sm font-medium break-words flex-1 ${isHabis ? 'text-red-300' : 'text-gray-200'
+                                            }`}>
+                                            {item}
+                                        </span>
                                     </div>
-                                    <span className="block text-sm font-medium text-gray-200 break-words flex-1">
-                                        {item}
-                                    </span>
-                                </div>
-                            ))
+                                );
+                            })
                         ) : (
                             <p className="text-sm text-gray-400 text-center py-8">Tidak ada detail alat.</p>
                         )}
@@ -396,13 +613,13 @@ function ResultState({ data, onReset }: { data: TransactionData; onReset: () => 
                 </div>
             </div>
 
-            {/* FOOTER - SELALU DI BAWAH */}
+            {/* FOOTER */}
             <div className="shrink-0 border-t border-gray-800 bg-[#0d1b2a] p-6">
                 <button
                     onClick={onReset}
                     className="w-full rounded-xl bg-gray-800 py-4 font-bold text-gray-300 hover:bg-gray-700 transition-all active:scale-95"
                 >
-                    SELESAI
+                    {hasAlatHabis ? 'KEMBALI KE SCAN' : 'SELESAI'}
                 </button>
             </div>
         </div>

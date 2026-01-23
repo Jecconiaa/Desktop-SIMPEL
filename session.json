@@ -1,0 +1,51 @@
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4MDMwZjE4Yi00OGUzLTQzYWQtYjEyOS1mODVmYmViODQ2Y2EiLCJuYW1hYWt1biI6ImFkbWluIiwiaWRyb2xlIjoiUk9MMjMiLCJpZGFwcCI6IkFQUDAxIiwiZXhwIjoxNzY5MTg1NzI2LCJpc3MiOiJodHRwOi8vbG9jYWxob3N0OjUyMzQiLCJhdWQiOiIqIn0.tRLU0J1n4wp4Dd7gl5yO49Ni34gaw5CarUkgUIQvTxc",
+  "permissions": [
+    "dashboard.baca",
+    "dashboard.tulis",
+    "dashboard.hapus",
+    "dashboard.edit",
+    "master.baca",
+    "master.tulis",
+    "master.hapus",
+    "master.edit",
+    "alat.baca",
+    "alat.tulis",
+    "alat.hapus",
+    "alat.edit",
+    "kategori_alat.baca",
+    "kategori_alat.tulis",
+    "kategori_alat.hapus",
+    "kategori_alat.edit",
+    "lokasi_alat.baca",
+    "lokasi_alat.tulis",
+    "lokasi_alat.hapus",
+    "lokasi_alat.edit",
+    "transaksi.baca",
+    "transaksi.tulis",
+    "transaksi.hapus",
+    "transaksi.edit",
+    "peminjaman.baca",
+    "peminjaman.tulis",
+    "peminjaman.hapus",
+    "peminjaman.edit"
+  ],
+  "user_info": {
+    "username": "admin",
+    "nama": "admin",
+    "app_id": "APP01",
+    "role_id": "ROL23",
+    "expires_at": "2026-01-23T16:28:46.2181975Z",
+    "list_aplikasi": [
+      {
+        "namaAplikasi": "Sistem Peminjaman Alat",
+        "namaRole": "Admin",
+        "root": "http://localhost:3000",
+        "appId": "APP01",
+        "roleId": "ROL23",
+        "appIcon": "icon-app"
+      }
+    ]
+  },
+  "is_authenticated": true
+}

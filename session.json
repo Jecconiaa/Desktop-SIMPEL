@@ -1,5 +1,5 @@
 {
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4MDMwZjE4Yi00OGUzLTQzYWQtYjEyOS1mODVmYmViODQ2Y2EiLCJuYW1hYWt1biI6ImFkbWluIiwiaWRyb2xlIjoiUk9MMjMiLCJpZGFwcCI6IkFQUDAxIiwiZXhwIjoxNzY5MTg1NzI2LCJpc3MiOiJodHRwOi8vbG9jYWxob3N0OjUyMzQiLCJhdWQiOiIqIn0.tRLU0J1n4wp4Dd7gl5yO49Ni34gaw5CarUkgUIQvTxc",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIyNWY4YmMyMC01MjQzLTRlOTUtYjlkMi01ZWEwOGYzNmVjMzYiLCJuYW1hYWt1biI6ImFkbWluIiwiaWRyb2xlIjoiUk9MMjMiLCJpZGFwcCI6IkFQUDAxIiwiZXhwIjoxNzY5MjgzNjMxLCJpc3MiOiJodHRwOi8vbG9jYWxob3N0OjUyMzQiLCJhdWQiOiIqIn0.eZ3LynYsacHph_6rEdstMB0R-Dx2143IYWQU4F8fpmY",
   "permissions": [
     "dashboard.baca",
     "dashboard.tulis",
@@ -35,7 +35,7 @@
     "nama": "admin",
     "app_id": "APP01",
     "role_id": "ROL23",
-    "expires_at": "2026-01-23T16:28:46.2181975Z",
+    "expires_at": "2026-01-24T19:40:31.6763434Z",
     "list_aplikasi": [
       {
         "namaAplikasi": "Sistem Peminjaman Alat",

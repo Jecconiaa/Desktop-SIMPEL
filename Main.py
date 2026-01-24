@@ -165,19 +165,46 @@ class AppSIMPEL(ctk.CTk):
             elapsed = time.time() - self.state_start_time
             if elapsed < 2.5:
                 self.progress_bar.set(elapsed / 2.5)
-                if elapsed > 1.0 and self.identified_user is None:
-                    small = cv2.resize(raw_frame, (0, 0), fx=0.25, fy=0.25)
-                    rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-                    face_locs = face_recognition.face_locations(rgb_small)
-                    face_encs = face_recognition.face_encodings(rgb_small, face_locs)
-                    for face_encoding in face_encs:
-                        matches = face_recognition.compare_faces(self.known_face_encodings, face_encoding, tolerance=0.5)
-                        if True in matches:
-                            idx = matches.index(True)
-                            self.identified_user = self.known_face_names[idx]
-                            self.welcome_label.configure(text=f"Hi, {self.identified_user}!", text_color="#4ade80")
-                        else:
-                            self.welcome_label.configure(text="WAJAH TIDAK DIKENAL", text_color="#f87171")
+            if elapsed > 1.0 and self.identified_user is None:
+                # Resize frame
+                small = cv2.resize(raw_frame, (0, 0), fx=0.25, fy=0.25)
+
+                # ===== DETEKSI (GRAYSCALE, PALING STABIL) =====
+                gray_small = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+                gray_small = np.ascontiguousarray(gray_small, dtype=np.uint8)
+
+                face_locs = face_recognition.face_locations(
+                    gray_small,
+                    number_of_times_to_upsample=0,
+                    model="hog"
+                )
+
+                # ===== ENCODING (RGB) =====
+                rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+                rgb_small = np.ascontiguousarray(rgb_small, dtype=np.uint8)
+
+                face_encs = face_recognition.face_encodings(rgb_small, face_locs)
+
+                for face_encoding in face_encs:
+                    matches = face_recognition.compare_faces(
+                        self.known_face_encodings,
+                        face_encoding,
+                        tolerance=0.5
+                    )
+
+                    if True in matches:
+                        idx = matches.index(True)
+                        self.identified_user = self.known_face_names[idx]
+                        self.welcome_label.configure(
+                            text=f"Hi, {self.identified_user}!",
+                            text_color="#4ade80"
+                        )
+                    else:
+                        self.welcome_label.configure(
+                            text="WAJAH TIDAK DIKENAL",
+                            text_color="#f87171"
+                        )
+
             else:
                 # ⭐ FIX: Satpam Logic - Cek identitas sebelum lanjut
                 if self.identified_user is not None:

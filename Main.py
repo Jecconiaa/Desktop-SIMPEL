@@ -179,7 +179,6 @@ class AppSIMPEL(ctk.CTk):
                         else:
                             self.welcome_label.configure(text="WAJAH TIDAK DIKENAL", text_color="#f87171")
             else:
-                # ⭐ FIX: Satpam Logic - Cek identitas sebelum lanjut
                 if self.identified_user is not None:
                     self.state_start_time = time.time()
                     self.current_state = 'STANDBY_CHALLENGE'
@@ -233,31 +232,57 @@ class AppSIMPEL(ctk.CTk):
         qrs = decode(processed) or decode(gray)
         return qrs[0].data.decode('utf-8') if qrs else None
 
+    # ⭐ UPDATED LOGIC: Auto Detect Pinjam/Balik
     def api_process_scan(self, qr_code):
         try:
-            res = self.api.post(f"/api/Borrowing/ScanQrPeminjaman/{qr_code}")
+            # 1. Ambil data status barang dulu
+            res_data = self.api.get(f"/api/Borrowing/GetScanDataByQr/{qr_code}")
             
-            # ⭐ FIX: Handle Token Expired (401)
-            if res == 401 or (isinstance(res, dict) and res.get("status") == 401):
-                self.welcome_label.configure(text="SESI HABIS!", text_color="#f87171")
-                self.status_label.configure(text="HARAP LOGOUT & LOGIN ULANG", text_color="#f87171")
+            if not res_data or not res_data.get('peminjaman_detail'):
+                self.status_label.configure(text="QR TIDAK TERDAFTAR!", text_color="#f87171")
                 return None
 
-            if isinstance(res, dict) and res.get("success"):
-                return self.api.get(f"/api/Borrowing/GetScanDataByQr/{qr_code}")
+            # 2. Cek status barang pertama sebagai patokan mode
+            status_sekarang = res_data['peminjaman_detail'][0].get('status', '').lower()
+            
+            # 3. Eksekusi berdasarkan status
+            mode = "TRANSAKSI"
+            if status_sekarang == "booked":
+                action_res = self.api.post(f"/api/Borrowing/ScanQrPeminjaman/{qr_code}")
+                mode = "PEMINJAMAN"
+            elif status_sekarang == "dipinjam":
+                action_res = self.api.post(f"/api/Borrowing/ScanQrPengembalian/{qr_code}")
+                mode = "PENGEMBALIAN"
+            else:
+                self.status_label.configure(text=f"STATUS {status_sekarang.upper()} TIDAK VALID", text_color="#f87171")
+                return None
+
+            # 4. Handle Unauthorized (401)
+            if action_res == 401 or (isinstance(action_res, dict) and action_res.get("status") == 401):
+                self.welcome_label.configure(text="SESI HABIS!", text_color="#f87171")
+                return None
+
+            # 5. Jika sukses, ambil data terbaru untuk ditampilkan
+            if action_res and (isinstance(action_res, dict) and action_res.get("success")):
+                updated_data = self.api.get(f"/api/Borrowing/GetScanDataByQr/{qr_code}")
+                if updated_data:
+                    updated_data['current_mode'] = mode
+                    return updated_data
             return None
+
         except Exception as e:
-            if "401" in str(e):
-                self.welcome_label.configure(text="LOGIN EXPIRED!", text_color="#f87171")
             print(f"API Error: {e}"); return None
 
+    # ⭐ UPDATED UI: Dynamic Display
     def handle_scan_success(self, res_data):
         mhs = res_data.get('mahasiswa', {})
-        items = res_data.get('peminjaman_detail', []) 
+        items = res_data.get('peminjaman_detail', [])
+        mode = res_data.get('current_mode', 'TRANSAKSI')
         
-        # ⭐ FITUR BARU: Tampilkan daftar barang di UI
-        info = (f"✅ DATA TERKIRIM\n👤 {mhs.get('nama')}\n🆔 NIM: {mhs.get('nim')}\n"
-                f"--------------------------\n📦 BARANG DIPINJAM:\n")
+        header = "✅ PEMINJAMAN BERHASIL" if mode == "PEMINJAMAN" else "♻️ PENGEMBALIAN BERHASIL"
+        
+        info = (f"{header}\n👤 {mhs.get('nama')}\n🆔 NIM: {mhs.get('nim')}\n"
+                f"--------------------------\n📦 DAFTAR ALAT:\n")
         
         if items:
             for i, item in enumerate(items, 1):
@@ -265,7 +290,7 @@ class AppSIMPEL(ctk.CTk):
         else:
             info += " (Tidak ada data alat)\n"
             
-        info += (f"--------------------------\n📢 STATUS: MENUNGGU ADMIN")
+        info += (f"--------------------------\n📢 STATUS: SELESAI")
         
         self.qr_info_box.configure(state="normal")
         self.qr_info_box.delete("0.0", "end")

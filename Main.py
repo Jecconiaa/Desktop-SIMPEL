@@ -214,43 +214,101 @@ class AppSIMPEL(ctk.CTk):
             self.status_label.configure(text="MENGHUBUNGKAN SERVER...", text_color="#22d3ee")
             self.draw_fancy_border(display_frame, (x_min, y_min), (x_max, y_max), (34, 211, 238))
 
-    def run_api_background(self, qr_code):
+    # ⭐ UPDATED LOGIC: Partial Return & Finalization
+    def api_process_scan(self, qr_code):
         try:
-            res_data = self.api_process_scan_logic(qr_code)
-            if res_data:
-                self.after(0, lambda: self.handle_scan_success(res_data))
-                self.after(0, lambda: setattr(self, 'current_state', 'SUCCESS'))
-            else:
-                self.after(0, lambda: self.status_label.configure(text="GAGAL SCAN / TIMEOUT", text_color="#f87171"))
-                self.after(3000, self.reset_total)
-        finally:
-            self.is_api_processing = False
+            # 1. Ambil data status barang terkini
+            res_data = self.api.get(f"/api/Borrowing/GetScanDataByQr/{qr_code}")
+            
+            if not res_data or not res_data.get('peminjaman_detail'):
+                self.status_label.configure(text="QR TIDAK TERDAFTAR!", text_color="#f87171")
+                return None
 
-    def api_process_scan_logic(self, qr_code):
-        try:
-            res = self.api.get(f"/api/Borrowing/GetScanDataByQr/{qr_code}")
-            if not res or not res.get('peminjaman_detail'): return None
-            status = res['peminjaman_detail'][0].get('status', '').lower()
-            if status == "booked":
-                act = self.api.post(f"/api/Borrowing/ScanQrPeminjaman/{qr_code}")
+            items = res_data.get('peminjaman_detail', [])
+            # Ambil status sampel dari item pertama
+            first_status = items[0].get('status', '').lower()
+            
+            mode = "INFO"
+            action_res = None
+            
+            # --- LOGIC DECISION ---
+            
+            # A. FASE PEMINJAMAN (Serah Terima Awal)
+            if first_status == "booked":
+                action_res = self.api.post(f"/api/Borrowing/ScanQrPeminjaman/{qr_code}")
                 mode = "PEMINJAMAN"
-            elif status == "dipinjam":
-                act = self.api.post(f"/api/Borrowing/ScanQrPengembalian/{qr_code}")
-                mode = "PENGEMBALIAN"
-            else: return None
-            if act and act.get("success"):
-                updated = self.api.get(f"/api/Borrowing/GetScanDataByQr/{qr_code}")
-                if updated: updated['current_mode'] = mode; return updated
+
+            # B. FASE PENGEMBALIAN / VERIFIKASI
+            # Status bisa 'dipinjam' atau 'dikembalikan' (campur)
+            elif first_status in ["dipinjam", "dikembalikan"]:
+                # Cek apakah SEMUA item sudah dikembalikan via Mobile?
+                all_returned = all(item.get('status', '').lower() == 'dikembalikan' for item in items)
+                
+                if all_returned:
+                    # ✅ FINALISASI: Semua alat sudah balik, Administrator 'tutup' transaksi
+                    action_res = self.api.post(f"/api/Borrowing/ScanQrPengembalian/{qr_code}")
+                    mode = "SELESAI"
+                else:
+                    # ⚠️ PARTIAL: Belum semua balik, cuma verifikasi status fisik
+                    # Kita set 'action_res' dummy success agar UI tetap update data
+                    action_res = {"success": True, "message": "Verification Only"}
+                    mode = "VERIFIKASI"
+
+            else:
+                 # Status lain: 'selesai', 'hilang', dll -> Cuma tampilkan info
+                 action_res = {"success": True}
+                 mode = "INFO"
+
+            # ----------------------
+
+            # 4. Handle Unauthorized (401)
+            if action_res == 401 or (isinstance(action_res, dict) and action_res.get("status") == 401):
+                self.welcome_label.configure(text="SESI HABIS!", text_color="#f87171")
+                return None
+
+            # 5. Jika sukses (atau sekedar verifikasi), ambil data terbaru untuk UI
+            if action_res and (isinstance(action_res, dict) and action_res.get("success") or True):
+                # Fetch ulang biar dapat status paling fresh (misal setelah POST)
+                updated_data = self.api.get(f"/api/Borrowing/GetScanDataByQr/{qr_code}")
+                if updated_data:
+                    updated_data['current_mode'] = mode
+                    return updated_data
             return None
         except: return None
 
     # --- UI & HELPER (LOGIKA ASLI LU) ---
     def handle_scan_success(self, res_data):
-        mhs, items = res_data.get('mahasiswa', {}), res_data.get('peminjaman_detail', [])
-        header = "✅ PEMINJAMAN BERHASIL" if res_data.get('current_mode') == "PEMINJAMAN" else "♻️ PENGEMBALIAN BERHASIL"
-        info = f"{header}\n👤 {mhs.get('nama')}\n🆔 NIM: {mhs.get('nim')}\n--------------------------\n📦 ALAT:\n"
-        for i, item in enumerate(items, 1): info += f" {i}. {item.get('nama_alat')} [{item.get('status').upper()}]\n"
-        self.qr_info_box.configure(state="normal"); self.qr_info_box.delete("0.0", "end"); self.qr_info_box.insert("0.0", info); self.qr_info_box.configure(state="disabled")
+        mhs = res_data.get('mahasiswa', {})
+        items = res_data.get('peminjaman_detail', [])
+        mode = res_data.get('current_mode', 'INFO')
+        
+        # Header Text Logic
+        if mode == "PEMINJAMAN":
+            header = "✅ PEMINJAMAN SUKSES"
+        elif mode == "SELESAI":
+            header = "🏁 TRANSAKSI SELESAI"
+        elif mode == "VERIFIKASI":
+            header = "📋 CEK STATUS BARANG"
+        else:
+            header = "ℹ️ INFO TRANSAKSI"
+        
+        info = (f"{header}\n👤 {mhs.get('nama')}\n🆔 NIM: {mhs.get('nim')}\n"
+                f"--------------------------\n📦 DETAIL STATUS:\n")
+        
+        if items:
+            for i, item in enumerate(items, 1):
+                raw_status = item.get('status', '').lower()
+                status_icon = "✅" if raw_status == 'dikembalikan' else "⏳" if raw_status == 'dipinjam' else "📦"
+                info += f" {i}. {item.get('nama_alat')} [{status_icon} {raw_status.upper()}]\n"
+        else:
+            info += " (Tidak ada data alat)\n"
+            
+        info += (f"--------------------------\n📢 MODE: {mode}")
+        
+        self.qr_info_box.configure(state="normal")
+        self.qr_info_box.delete("0.0", "end")
+        self.qr_info_box.insert("0.0", info)
+        self.qr_info_box.configure(state="disabled")
         self.after(10000, self.reset_total)
 
     def reset_total(self):

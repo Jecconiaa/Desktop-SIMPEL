@@ -29,7 +29,7 @@ class DesktopMiddleware:
             "Content-Type": "application/json",
             "Accept": "application/json",
             "User-Agent": "SIMPEL-Desktop/1.0",
-            "Host": "localhost:5234",  # ⚠️ INI YANG PENTING! ⚠️
+            #"Host": "localhost:5234",  # ⚠️ INI YANG PENTING! ⚠️
         })
     
     def set_request_hook(self, hook: Callable):

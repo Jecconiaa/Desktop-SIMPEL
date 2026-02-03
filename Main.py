@@ -61,7 +61,7 @@ class AppSIMPEL(ctk.CTk):
         self.is_face_processing = False
         self.last_face_scan_time = 0
         self.face_scan_interval = 1.5  # Cooldown 1 detik biar CPU gak meledak
-        self.FR_TOLERANCE = 0.45       
+        self.FR_TOLERANCE = 0.55       # ✅ Lebih toleran buat low-light       
         
         self.is_qr_processing = False  # 🚀 Flag buat QR thread
         
@@ -209,7 +209,20 @@ class AppSIMPEL(ctk.CTk):
         try:
             # Resize kecil biar cepet
             small = cv2.resize(frame_copy, (0, 0), fx=0.15, fy=0.15)  # Lebih kecil dari encode
-            rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+            
+            # 🌟 AUTO BRIGHTNESS ENHANCEMENT (Low-light fix)
+            # Convert ke LAB color space (L = Lightness, A = Green-Red, B = Blue-Yellow)
+            lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) ke channel L
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4,4))
+            l_enhanced = clahe.apply(l)
+            # Merge balik
+            lab_enhanced = cv2.merge([l_enhanced, a, b])
+            enhanced = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2BGR)
+            
+            # Convert RGB & Contiguous
+            rgb_small = cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB)
             rgb_small = np.ascontiguousarray(rgb_small.astype(np.uint8))
             
             # Deteksi lokasi wajah (cepet)
@@ -243,7 +256,17 @@ class AppSIMPEL(ctk.CTk):
             
             # Resize untuk encoding
             small = cv2.resize(frame_copy, (0, 0), fx=0.2, fy=0.2)
-            rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+            
+            # 🌟 AUTO BRIGHTNESS ENHANCEMENT (Low-light fix)
+            lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4,4))
+            l_enhanced = clahe.apply(l)
+            lab_enhanced = cv2.merge([l_enhanced, a, b])
+            enhanced = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2BGR)
+            
+            # Convert RGB & Contiguous
+            rgb_small = cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB)
             rgb_small = np.ascontiguousarray(rgb_small.astype(np.uint8))
             
             # Encode wajah (berat)

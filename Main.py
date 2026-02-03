@@ -11,6 +11,7 @@ from PIL import Image
 from pyzbar.pyzbar import decode
 import urllib3
 
+# Nonaktifkan peringatan SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- 1. SETUP PATH ---
@@ -43,33 +44,39 @@ class AppSIMPEL(ctk.CTk):
             self.show_login_required(); return
         
         self.api.set_token(auth_context.get_token())
-        self.admin_session = auth_context.get_username()
 
         # Window Config
-        self.title(" 🛡️ SIMPEL - Scanner Desktop ")
-        self.geometry("1200x800")
+        self.title("🛡️ SIMPEL - High Performance Clean UI")
+        self.geometry("1280x720")
         self.after(0, lambda: self.state('zoomed')) 
         ctk.set_appearance_mode("dark")
 
-        # Engines
+        # Database & Engines
         self.known_face_encodings = []
         self.known_face_names = []
         self.load_known_faces() 
-        self.face_mesh = mp_face_mesh.FaceMesh(refine_landmarks=True, min_detection_confidence=0.6)
-        self.list_pilihan_challenge = ["Tengok Kanan", "Tengok Kiri", "Kedip 2x", "Buka Mulut"]
+        self.face_mesh = mp_face_mesh.FaceMesh(refine_landmarks=True, min_detection_confidence=0.6, min_tracking_confidence=0.6)
+        
+        # --- Performance Flags (Secret Sauce integrated) ---
+        self.is_face_processing = False
+        self.last_face_scan_time = 0
+        self.face_scan_interval = 1.0  # Cooldown 1 detik biar CPU gak meledak
+        self.FR_TOLERANCE = 0.45       
+        
+        self.frame_count = 0
+        self.last_known_lms = None 
+        self.no_face_counter = 0    
+        self.face_buffer_limit = 3  
         
         self.reset_all_states()
         self.setup_ui() 
         
+        # Camera Setup (HD)
         self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        
         self.update_frame()
-
-    def enhance_lighting(self, frame):
-        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        cl = clahe.apply(l)
-        return cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2BGR)
 
     def load_known_faces(self):
         path = os.path.join(project_root, "assets")
@@ -83,275 +90,200 @@ class AppSIMPEL(ctk.CTk):
                         self.known_face_encodings.append(encs[0])
                         self.known_face_names.append(os.path.splitext(filename)[0].replace("_", " ").title())
                 except: pass
+        print(f"✅ Database Loaded: {len(self.known_face_names)} faces")
 
     def reset_all_states(self):
-        self.current_state = 'STANDBY_FACE' 
-        self.state_start_time = None
+        self.current_state = 'STANDBY' 
         self.identified_user = None 
+        self.current_qr_data = None
         self.blink_count = 0
         self.eye_closed = False
-        self.is_api_processing = False
-        self.active_challenge = random.choice(self.list_pilihan_challenge)
-        self.EYE_AR_THRESH = 0.20
-        self.LEFT_EYE = [362, 385, 387, 263, 373, 380]
-        self.RIGHT_EYE = [33, 160, 158, 133, 153, 144]
+        self.active_challenge = random.choice(["Tengok Kanan", "Tengok Kiri", "Kedip 2x", "Buka Mulut"])
+        self.face_detected_start_time = 0
 
     def setup_ui(self):
         self.header = ctk.CTkFrame(self, height=60, corner_radius=0, fg_color="#162032")
         self.header.pack(side="top", fill="x")
-        ctk.CTkLabel(self.header, text="SIMPEL - Sistem Informasi Peminjaman Alat Laboratorium (Multi Fusion AI)", font=("Arial", 22, "bold"), text_color="#22d3ee").pack(pady=15)
-        self.main_container = ctk.CTkFrame(self, fg_color="transparent")
-        self.main_container.pack(expand=True, fill="both", padx=20, pady=20)
-        self.right_panel = ctk.CTkFrame(self.main_container, width=380, corner_radius=20, fg_color="#162032")
-        self.right_panel.pack(side="right", fill="y", padx=(20, 0))
-        self.right_panel.pack_propagate(False)
-        self.welcome_label = ctk.CTkLabel(self.right_panel, text="MENGENALI WAJAH...", font=("Arial", 20, "bold"), text_color="#22d3ee")
-        self.welcome_label.pack(pady=(60, 5))
-        self.status_label = ctk.CTkLabel(self.right_panel, text="SISTEM STANDBY", font=("Arial", 14), text_color="gray")
-        self.status_label.pack(pady=5)
-        self.progress_bar = ctk.CTkProgressBar(self.right_panel, width=300); self.progress_bar.pack(pady=20); self.progress_bar.set(0)
-        self.qr_info_box = ctk.CTkTextbox(self.right_panel, width=320, height=350, corner_radius=15, fg_color="#0d1b2a", font=("Arial", 13))
-        self.qr_info_box.pack(pady=10, padx=20); self.qr_info_box.insert("0.0", "📦 STATUS: READY"); self.qr_info_box.configure(state="disabled")
-        self.btn_logout = ctk.CTkButton(self.right_panel, text="LOGOUT & EXIT", command=self.logout, fg_color="#dc2626", hover_color="#b91c1c", height=45, font=("Arial", 13, "bold"))
-        self.btn_logout.pack(side="bottom", pady=30)
-        self.video_container = ctk.CTkFrame(self.main_container, corner_radius=20, fg_color="black")
-        self.video_container.pack(side="left", expand=True, fill="both")
-        self.video_label = ctk.CTkLabel(self.video_container, text="")
-        self.video_label.pack(expand=True, fill="both", padx=10, pady=10)
+        
+        self.btn_logout = ctk.CTkButton(self.header, text="🚪 LOGOUT", width=100, height=35, 
+                                        fg_color="#dc2626", hover_color="#b91c1c", 
+                                        font=("Arial", 12, "bold"), command=self.logout)
+        self.btn_logout.pack(side="left", padx=15, pady=12)
+
+        ctk.CTkLabel(self.header, text="🛡️ SIMPEL SCANNER SYSTEM", font=("Arial", 18, "bold"), text_color="#22d3ee").pack(pady=15)
+        
+        self.video_label = ctk.CTkLabel(self, text="", fg_color="black")
+        self.video_label.pack(expand=True, fill="both")
+
+    # --- DRAWING HELPERS (DROP SHADOW - NO BOX/BORDER) ---
+    def draw_floating_text(self, img, text, pos_x, pos_y, color):
+        font = cv2.FONT_HERSHEY_DUPLEX
+        font_scale = 0.9; thickness = 2
+        text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+        tx = pos_x - (text_size[0] // 2)
+        
+        # Shadow effect (geser 2 pixel hitam)
+        cv2.putText(img, text, (tx + 2, pos_y + 2), font, font_scale, (0, 0, 0), thickness + 1)
+        # Main text
+        cv2.putText(img, text, (tx, pos_y), font, font_scale, color, thickness)
+
+    def draw_fancy_border(self, img, pt1, pt2, color):
+        x1, y1, x2, y2, r = pt1[0], pt1[1], pt2[0], pt2[1], 35
+        for p in [(x1,y1,1,1), (x2,y1,-1,1), (x1,y2,1,-1), (x2,y2,-1,-1)]:
+            cv2.line(img, (p[0]+2, p[1]+2), (p[0] + p[2]*r + 2, p[1]+2), (0,0,0), 6) # Shadow
+            cv2.line(img, (p[0]+2, p[1]+2), (p[0], p[1] + p[3]*r + 2), (0,0,0), 6) # Shadow
+            cv2.line(img, (p[0], p[1]), (p[0] + p[2]*r, p[1]), color, 5) # Main
+            cv2.line(img, (p[0], p[1]), (p[0], p[1] + p[3]*r), color, 5) # Main
 
     def update_frame(self):
         if not self.cap.isOpened(): return
         ret, frame = self.cap.read()
         if not ret: return
+        
+        self.frame_count += 1
         frame = cv2.flip(frame, 1)
         display_frame = frame.copy()
+
+        # 1. SCAN QR (Optimasi tiap 5 frame)
+        if self.frame_count % 5 == 0 and self.current_state in ['STANDBY', 'LOCKING']:
+            qr = self.detect_qr(frame)
+            if qr: self.current_qr_data = qr
+
+        # 2. SCAN WAJAH (Background Thread - Optimized)
+        now = time.time()
+        # Ditambah check interval biar pas "UNKNOWN" gak nyepam CPU
+        if not self.is_face_processing:
+            if now - self.last_face_scan_time > self.face_scan_interval:
+                self.last_face_scan_time = now
+                threading.Thread(target=self.recognize_face_worker, args=(frame.copy(),), daemon=True).start()
+
+        # 3. MEDIAPIPE (UI/Liveness)
         res = self.face_mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        
         if res.multi_face_landmarks:
-            lms = res.multi_face_landmarks[0].landmark
-            self.process_logic(display_frame, lms, frame)
+            self.last_known_lms = res.multi_face_landmarks[0].landmark
+            self.no_face_counter = 0
+            if self.face_detected_start_time == 0: self.face_detected_start_time = time.time()
         else:
-            if self.current_state not in ['SCAN_QR', 'SUCCESS', 'PROCESSING_API']:
-                self.reset_ui_to_idle()
+            self.no_face_counter += 1
+        
+        # Auto-reset UI
+        if self.no_face_counter >= self.face_buffer_limit:
+            if self.current_state not in ['PROCESSING_API', 'SUCCESS']: self.reset_all_states()
+            self.last_known_lms = None
+
+        if self.last_known_lms:
+            self.process_logic_ui(display_frame, self.last_known_lms)
 
         self.render_to_ui(display_frame)
         self.after(10, self.update_frame)
 
-    def reset_ui_to_idle(self):
-        self.reset_all_states()
-        self.welcome_label.configure(text="MENGENALI WAJAH...", text_color="#22d3ee")
-        self.status_label.configure(text="SISTEM STANDBY", text_color="gray")
-        self.progress_bar.set(0)
+    # --- WORKER: FACE RECOGNITION (OPTIMIZED AS REQUESTED) ---
+    def recognize_face_worker(self, frame_copy):
+        self.is_face_processing = True
+        try:
+            # 1. Resize sekecil mungkin (0.2x) biar enteng
+            small = cv2.resize(frame_copy, (0, 0), fx=0.2, fy=0.2)
+            # 2. Convert & Contiguous buat speed
+            rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+            rgb_small = np.ascontiguousarray(rgb_small.astype(np.uint8))
 
-    def process_logic(self, display_frame, lms, raw_frame):
+            # 3. Detect (HOG is faster than CNN)
+            face_locs = face_recognition.face_locations(rgb_small, model="hog")
+            if face_locs:
+                encs = face_recognition.face_encodings(rgb_small, face_locs)
+                if encs:
+                    dist = face_recognition.face_distance(self.known_face_encodings, encs[0])
+                    if len(dist) > 0 and np.min(dist) <= self.FR_TOLERANCE:
+                        name = self.known_face_names[np.argmin(dist)]
+                        self.after(0, lambda n=name: setattr(self, 'identified_user', n))
+                        return
+            
+            # Kalau gak ada wajah atau gak kenal
+            self.after(0, lambda: setattr(self, 'identified_user', "UNKNOWN"))
+        except: pass
+        finally:
+            self.is_face_processing = False
+
+    def process_logic_ui(self, display_frame, lms):
         h, w, _ = display_frame.shape
         x_min, y_min = int(lms[234].x * w), int(lms[10].y * h)
         x_max, y_max = int(lms[454].x * w), int(lms[152].y * h)
+        cx = (x_min + x_max) // 2
 
-        if self.current_state == 'STANDBY_FACE':
-            self.draw_fancy_border(display_frame, (x_min, y_min), (x_max, y_max), (0, 211, 238))
-            self.state_start_time = time.time()
-            self.current_state = 'LOCKING_FACE'
+        # Teks Atas
+        top_txt = ""
+        if not self.current_qr_data:
+            if time.time() - self.face_detected_start_time > 2.5: top_txt = "QR TIDAK TERBACA"
+        elif self.current_state == 'CHALLENGE': top_txt = f"TUGAS: {self.active_challenge.upper()}"
+        if top_txt: self.draw_floating_text(display_frame, top_txt, cx, y_min - 35, (71, 71, 248)) 
 
-        elif self.current_state == 'LOCKING_FACE':
-            self.draw_fancy_border(display_frame, (x_min, y_min), (x_max, y_max), (0, 211, 238))
-            elapsed = time.time() - self.state_start_time
-            if elapsed < 2.5: self.progress_bar.set(elapsed / 2.5)
-            
-            if elapsed > 1.2 and self.identified_user is None:
-                enhanced = self.enhance_lighting(raw_frame)
-                small = cv2.resize(enhanced, (0, 0), fx=0.25, fy=0.25)
-                rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-                face_locs = face_recognition.face_locations(rgb_small, model="hog")
-                face_encs = face_recognition.face_encodings(rgb_small, face_locs)
-                if face_encs:
-                    dist = face_recognition.face_distance(self.known_face_encodings, face_encs[0])
-                    if len(dist) > 0 and np.min(dist) <= 0.45:
-                        self.identified_user = self.known_face_names[np.argmin(dist)]
-                        self.welcome_label.configure(text=f"Hi, {self.identified_user}!", text_color="#4ade80")
-                elif elapsed > 4.0: self.welcome_label.configure(text="WAJAH TIDAK DIKENAL", text_color="#f87171")
+        # Teks Bawah
+        bot_txt = ""
+        if self.identified_user == "UNKNOWN": bot_txt = "WAJAH ASING!"
+        elif self.identified_user: bot_txt = f"USER: {self.identified_user}"
+        if bot_txt: self.draw_floating_text(display_frame, bot_txt, cx, y_max + 55, (74, 222, 128))
 
-            elif elapsed > 3.0:
-                if self.identified_user:
-                    # FIX: Reset timer buat countdown
-                    self.state_start_time = time.time()
-                    self.current_state = 'CHALLENGE'
-                elif elapsed > 6.0: self.reset_ui_to_idle()
+        # Border
+        clr = (251, 191, 36) if self.current_state == 'CHALLENGE' else (238, 211, 0)
+        if self.current_state == 'SUCCESS': clr = (74, 222, 128)
+        self.draw_fancy_border(display_frame, (x_min, y_min), (x_max, y_max), clr)
 
-#        elif self.current_state == 'STANDBY_CHALLENGE':
-#            self.draw_fancy_border(display_frame, (x_min, y_min), (x_max, y_max), (251, 191, 36))
-#            elapsed = time.time() - self.state_start_time
-#            countdown = 3 - int(elapsed)
-#            if countdown > 0:
-#                self.status_label.configure(text=f"SIAP-SIAP! ({countdown})", text_color="#fbbf24")
-#                cv2.putText(display_frame, str(countdown), (w//2-40, h//2+50), cv2.FONT_HERSHEY_DUPLEX, 5, (255, 255, 255), 10)
-#                self.progress_bar.set(elapsed / 3.0)
-#            else:
-#                self.current_state = 'CHALLENGE'
-#                self.progress_bar.set(0)
-
+        # State transitions
+        if self.current_state == 'STANDBY': self.current_state = 'LOCKING'
+        elif self.current_state == 'LOCKING' and self.identified_user and self.identified_user != "UNKNOWN" and self.current_qr_data:
+            self.current_state = 'CHALLENGE'
         elif self.current_state == 'CHALLENGE':
-            self.draw_fancy_border(display_frame, (x_min, y_min), (x_max, y_max), (251, 191, 36))
-            target = self.active_challenge
-            self.status_label.configure(text=f"TUGAS: {target.upper()}", text_color="#fbbf24")
-            detected = self.check_liveness_features(lms)
-            self.handle_blink(lms)
-            if self.blink_count >= 2: detected.append("Kedip 2x")
-            if target in detected:
-                self.current_state = 'SCAN_QR'
-                self.progress_bar.set(1.0)
+            self.handle_liveness_check(lms)
 
-        elif self.current_state == 'SCAN_QR':
-            self.draw_fancy_border(display_frame, (x_min, y_min), (x_max, y_max), (74, 222, 128))
-            self.status_label.configure(text="WAJAH OK! SILAKAN SCAN QR", text_color="#4ade80")
-            qr_data = self.detect_qr(raw_frame)
-            if qr_data and not self.is_api_processing:
-                self.is_api_processing = True
-                self.current_state = 'PROCESSING_API'
-                threading.Thread(target=self.run_api_background, args=(qr_data,), daemon=True).start()
-
-        elif self.current_state == 'PROCESSING_API':
-            self.status_label.configure(text="MENGHUBUNGKAN SERVER...", text_color="#22d3ee")
-            self.draw_fancy_border(display_frame, (x_min, y_min), (x_max, y_max), (34, 211, 238))
-
-    # ⭐ UPDATED LOGIC: Partial Return & Finalization
-    def api_process_scan(self, qr_code):
-        try:
-            # 1. Ambil data status barang terkini
-            res_data = self.api.get(f"/api/Borrowing/GetScanDataByQr/{qr_code}")
-            
-            if not res_data or not res_data.get('peminjaman_detail'):
-                self.status_label.configure(text="QR TIDAK TERDAFTAR!", text_color="#f87171")
-                return None
-
-            items = res_data.get('peminjaman_detail', [])
-            # Ambil status sampel dari item pertama
-            first_status = items[0].get('status', '').lower()
-            
-            mode = "INFO"
-            action_res = None
-            
-            # --- LOGIC DECISION ---
-            
-            # A. FASE PEMINJAMAN (Serah Terima Awal)
-            if first_status == "booked":
-                action_res = self.api.post(f"/api/Borrowing/ScanQrPeminjaman/{qr_code}")
-                mode = "PEMINJAMAN"
-
-            # B. FASE PENGEMBALIAN / VERIFIKASI
-            # Status bisa 'dipinjam' atau 'dikembalikan' (campur)
-            elif first_status in ["dipinjam", "dikembalikan"]:
-                # Cek apakah SEMUA item sudah dikembalikan via Mobile?
-                all_returned = all(item.get('status', '').lower() == 'dikembalikan' for item in items)
-                
-                if all_returned:
-                    # ✅ FINALISASI: Semua alat sudah balik, Administrator 'tutup' transaksi
-                    action_res = self.api.post(f"/api/Borrowing/ScanQrPengembalian/{qr_code}")
-                    mode = "SELESAI"
-                else:
-                    # ⚠️ PARTIAL: Belum semua balik, cuma verifikasi status fisik
-                    # Kita set 'action_res' dummy success agar UI tetap update data
-                    action_res = {"success": True, "message": "Verification Only"}
-                    mode = "VERIFIKASI"
-
-            else:
-                 # Status lain: 'selesai', 'hilang', dll -> Cuma tampilkan info
-                 action_res = {"success": True}
-                 mode = "INFO"
-
-            # ----------------------
-
-            # 4. Handle Unauthorized (401)
-            if action_res == 401 or (isinstance(action_res, dict) and action_res.get("status") == 401):
-                self.welcome_label.configure(text="SESI HABIS!", text_color="#f87171")
-                return None
-
-            # 5. Jika sukses (atau sekedar verifikasi), ambil data terbaru untuk UI
-            if action_res and (isinstance(action_res, dict) and action_res.get("success") or True):
-                # Fetch ulang biar dapat status paling fresh (misal setelah POST)
-                updated_data = self.api.get(f"/api/Borrowing/GetScanDataByQr/{qr_code}")
-                if updated_data:
-                    updated_data['current_mode'] = mode
-                    return updated_data
-            return None
-        except: return None
-
-    # --- UI & HELPER (LOGIKA ASLI LU) ---
-    def handle_scan_success(self, res_data):
-        mhs = res_data.get('mahasiswa', {})
-        items = res_data.get('peminjaman_detail', [])
-        mode = res_data.get('current_mode', 'INFO')
+    def handle_liveness_check(self, lms):
+        nose = lms[4].x; re = lms[234].x; le = lms[454].x
+        ratio = (nose - re) / (le - re) if (le - re) != 0 else 0.5
+        moves = []
+        if ratio < 0.35: moves.append("Tengok Kiri")
+        elif ratio > 0.65: moves.append("Tengok Kanan")
+        if abs(lms[13].y - lms[14].y) > 0.05: moves.append("Buka Mulut")
         
-        # Header Text Logic
-        if mode == "PEMINJAMAN":
-            header = "✅ PEMINJAMAN SUKSES"
-        elif mode == "SELESAI":
-            header = "🏁 TRANSAKSI SELESAI"
-        elif mode == "VERIFIKASI":
-            header = "📋 CEK STATUS BARANG"
-        else:
-            header = "ℹ️ INFO TRANSAKSI"
-        
-        info = (f"{header}\n👤 {mhs.get('nama')}\n🆔 NIM: {mhs.get('nim')}\n"
-                f"--------------------------\n📦 DETAIL STATUS:\n")
-        
-        if items:
-            for i, item in enumerate(items, 1):
-                raw_status = item.get('status', '').lower()
-                status_icon = "✅" if raw_status == 'dikembalikan' else "⏳" if raw_status == 'dipinjam' else "📦"
-                info += f" {i}. {item.get('nama_alat')} [{status_icon} {raw_status.upper()}]\n"
-        else:
-            info += " (Tidak ada data alat)\n"
-            
-        info += (f"--------------------------\n📢 MODE: {mode}")
-        
-        self.qr_info_box.configure(state="normal")
-        self.qr_info_box.delete("0.0", "end")
-        self.qr_info_box.insert("0.0", info)
-        self.qr_info_box.configure(state="disabled")
-        self.after(10000, self.reset_total)
+        # Blink Check
+        def d(p1, p2): return ((p1.x - p2.x)**2 + (p1.y - p2.y)**2)**0.5
+        ear = ( (d(lms[385], lms[380]) + d(lms[387], lms[373])) / (2 * d(lms[362], lms[263])) +
+                (d(lms[160], lms[144]) + d(lms[158], lms[153])) / (2 * d(lms[33], lms[133])) ) / 2
+        if ear < 0.20: self.eye_closed = True
+        elif self.eye_closed and ear > 0.25:
+            self.blink_count += 1; self.eye_closed = False
+        if self.blink_count >= 2: moves.append("Kedip 2x")
 
-    def reset_total(self):
-        self.reset_ui_to_idle()
-        self.qr_info_box.configure(state="normal"); self.qr_info_box.delete("0.0", "end"); self.qr_info_box.insert("0.0", "📦 STATUS: READY"); self.qr_info_box.configure(state="disabled")
+        if self.active_challenge in moves:
+            self.current_state = 'PROCESSING_API'
+            threading.Thread(target=self.run_api_background, args=(self.current_qr_data,), daemon=True).start()
 
     def detect_qr(self, frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        proc = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-        qrs = decode(proc) or decode(gray)
+        qrs = decode(gray)
         return qrs[0].data.decode('utf-8') if qrs else None
-
-    def calculate_ear(self, lms, idx):
-        def d(p1, p2): return ((p1.x - p2.x)**2 + (p1.y - p2.y)**2)**0.5
-        return (d(lms[idx[1]], lms[idx[5]]) + d(lms[idx[2]], lms[idx[4]])) / (2.0 * d(lms[idx[0]], lms[idx[3]]))
-
-    def check_liveness_features(self, lms):
-        nose, re, le = lms[4].x, lms[234].x, lms[454].x
-        ratio = (nose - re) / (le - re) if (le - re) != 0 else 0.5
-        res = []
-        if ratio < 0.35: res.append("Tengok Kiri")
-        elif ratio > 0.65: res.append("Tengok Kanan")
-        if abs(lms[13].y - lms[14].y) > 0.05: res.append("Buka Mulut")
-        return res
-
-    def handle_blink(self, lms):
-        ear = (self.calculate_ear(lms, self.LEFT_EYE) + self.calculate_ear(lms, self.RIGHT_EYE)) / 2.0
-        if ear < self.EYE_AR_THRESH: self.eye_closed = True
-        elif self.eye_closed and ear > (self.EYE_AR_THRESH + 0.05): self.blink_count += 1; self.eye_closed = False
-
-    def draw_fancy_border(self, img, pt1, pt2, color):
-        x1, y1, x2, y2, r = pt1[0], pt1[1], pt2[0], pt2[1], 25
-        for p in [(x1,y1,1,1), (x2,y1,-1,1), (x1,y2,1,-1), (x2,y2,-1,-1)]:
-            cv2.line(img, (p[0], p[1]), (p[0] + p[2]*r, p[1]), color, 4)
-            cv2.line(img, (p[0], p[1]), (p[0], p[1] + p[3]*r), color, 4)
 
     def render_to_ui(self, frame):
         try:
-            w, h = self.video_label.winfo_width(), self.video_label.winfo_height()
-            if w > 100 and h > 100:
-                img = ctk.CTkImage(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)), size=(w, h))
-                self.video_label.configure(image=img)
+            w_lbl, h_lbl = self.video_label.winfo_width(), self.video_label.winfo_height()
+            if w_lbl > 100 and h_lbl > 100:
+                h_f, w_f = frame.shape[:2]
+                ratio = max(w_lbl/w_f, h_lbl/h_f)
+                new_w, new_h = int(w_f * ratio), int(h_f * ratio)
+                frame_res = cv2.resize(frame, (new_w, new_h))
+                sx = (new_w - w_lbl) // 2; sy = (new_h - h_lbl) // 2
+                crop = frame_res[sy:sy+h_lbl, sx:sx+w_lbl]
+                img = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+                self.video_label.configure(image=ctk.CTkImage(img, size=(w_lbl, h_lbl)))
         except: pass
+
+    def run_api_background(self, qr):
+        try:
+            res = self.api.get(f"/api/Borrowing/GetScanDataByQr/{qr}")
+            if res: self.after(0, self.handle_scan_success)
+            else: self.after(3000, self.reset_all_states)
+        except: self.after(3000, self.reset_all_states)
+
+    def handle_scan_success(self):
+        self.current_state = 'SUCCESS'; self.after(5000, self.reset_all_states)
 
     def logout(self):
         auth_context.sign_out()
@@ -359,8 +291,7 @@ class AppSIMPEL(ctk.CTk):
         self.destroy(); sys.exit(0)
 
     def show_login_required(self):
-        ctk.CTkLabel(self, text="🔐 HARAP LOGIN").pack(expand=True)
-        self.after(2000, self.destroy)
+        ctk.CTkLabel(self, text="🔐 HARAP LOGIN").pack(expand=True); self.after(2000, self.destroy)
 
 if __name__ == "__main__":
     app = AppSIMPEL(); app.mainloop()

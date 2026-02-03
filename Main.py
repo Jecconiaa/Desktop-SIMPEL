@@ -65,6 +65,19 @@ class AppSIMPEL(ctk.CTk):
         
         self.is_qr_processing = False  # 🚀 Flag buat QR thread
         
+        # 🔥 PIPELINE THREADING FLAGS
+        self.is_detecting_face = False       # Thread A (lightweight)
+        self.is_identifying_face = False     # Thread B (heavy)
+        self.last_detect_time = 0
+        self.last_identify_time = 0
+        self.detect_interval = 0.3           # Deteksi cepet (300ms)
+        self.identify_interval = 1.5         # Identifikasi lambat (1.5s)
+        
+        # 🛡️ RACE CONDITION PROTECTION
+        self.face_data_lock = threading.Lock()
+        self.cached_face_locations = None    # Thread A simpan kesini
+        self.cached_frame_for_encoding = None
+        
         self.frame_count = 0
         self.last_known_lms = None 
         self.no_face_counter = 0    
@@ -152,13 +165,24 @@ class AppSIMPEL(ctk.CTk):
                 self.is_qr_processing = True
                 threading.Thread(target=self.detect_qr_worker, args=(frame.copy(),), daemon=True).start()
 
-        # 2. SCAN WAJAH (Background Thread - Optimized)
+        # 2. PIPELINE FACE RECOGNITION (2 Thread Terpisah)
         now = time.time()
-        # Ditambah check interval biar pas "UNKNOWN" gak nyepam CPU
-        if not self.is_face_processing:
-            if now - self.last_face_scan_time > self.face_scan_interval:
-                self.last_face_scan_time = now
-                threading.Thread(target=self.recognize_face_worker, args=(frame.copy(),), daemon=True).start()
+        
+        # 🔹 THREAD A: Deteksi Ada Wajah Ga (Lightweight - 300ms interval)
+        if not self.is_detecting_face and now - self.last_detect_time > self.detect_interval:
+            self.last_detect_time = now
+            self.is_detecting_face = True
+            threading.Thread(target=self.detect_face_worker, args=(frame.copy(),), daemon=True).start()
+        
+        # 🔹 THREAD B: Identifikasi Siapa (Heavy - 1.5s interval, cuma jalan kalau ada wajah)
+        if not self.is_identifying_face and now - self.last_identify_time > self.identify_interval:
+            # Cek apakah Thread A udah deteksi ada wajah
+            with self.face_data_lock:
+                if self.cached_face_locations is not None:
+                    self.last_identify_time = now
+                    self.is_identifying_face = True
+                    # Pass data aman pake lock
+                    threading.Thread(target=self.identify_face_worker, daemon=True).start()
 
         # 3. MEDIAPIPE (UI/Liveness)
         res = self.face_mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
@@ -180,34 +204,65 @@ class AppSIMPEL(ctk.CTk):
         self.render_to_ui(display_frame)
         self.after(16, self.update_frame)  # 16ms = ~60 FPS (lebih smooth)
 
-    # --- WORKER: FACE RECOGNITION (OPTIMIZED AS REQUESTED) ---
-    def recognize_face_worker(self, frame_copy):
-        self.is_face_processing = True
+    # 🔹 THREAD A: Deteksi Wajah (Lightweight)
+    def detect_face_worker(self, frame_copy):
         try:
-            # 1. Resize sekecil mungkin (0.2x) biar enteng
-            small = cv2.resize(frame_copy, (0, 0), fx=0.2, fy=0.2)
-            # 2. Convert & Contiguous buat speed
+            # Resize kecil biar cepet
+            small = cv2.resize(frame_copy, (0, 0), fx=0.15, fy=0.15)  # Lebih kecil dari encode
             rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
             rgb_small = np.ascontiguousarray(rgb_small.astype(np.uint8))
-
-            # 3. Detect (HOG is faster than CNN)
-            face_locs = face_recognition.face_locations(rgb_small, model="hog")
-            if face_locs:
-                encs = face_recognition.face_encodings(rgb_small, face_locs)
-                if encs and self.known_face_encodings:  # ✅ CEK DATABASE KOSONG
-                    dist = face_recognition.face_distance(self.known_face_encodings, encs[0])
-                    if len(dist) > 0 and np.min(dist) <= self.FR_TOLERANCE:
-                        name = self.known_face_names[np.argmin(dist)]
-                        self.after(0, lambda n=name: setattr(self, 'identified_user', n))
-                        return
             
-            # Kalau gak ada wajah atau gak kenal (tapi database ada isinya)
+            # Deteksi lokasi wajah (cepet)
+            face_locs = face_recognition.face_locations(rgb_small, model="hog")
+            
+            # Simpan hasil ke cache (AMAN pake Lock)
+            with self.face_data_lock:
+                if face_locs:
+                    self.cached_face_locations = face_locs
+                    self.cached_frame_for_encoding = frame_copy  # Simpan frame asli buat Thread B
+                else:
+                    self.cached_face_locations = None
+                    # Reset status kalau gak ada wajah
+                    if self.identified_user and self.identified_user != "UNKNOWN":
+                        self.after(0, lambda: setattr(self, 'identified_user', None))
+        except Exception as e:
+            print(f"⚠️ Face detection error: {e}")
+        finally:
+            self.is_detecting_face = False
+    
+    # 🔹 THREAD B: Identifikasi Wajah (Heavy)
+    def identify_face_worker(self):
+        try:
+            # Ambil data dari Thread A (AMAN pake Lock)
+            with self.face_data_lock:
+                face_locs = self.cached_face_locations
+                frame_copy = self.cached_frame_for_encoding
+            
+            if face_locs is None or frame_copy is None:
+                return
+            
+            # Resize untuk encoding
+            small = cv2.resize(frame_copy, (0, 0), fx=0.2, fy=0.2)
+            rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+            rgb_small = np.ascontiguousarray(rgb_small.astype(np.uint8))
+            
+            # Encode wajah (berat)
+            encs = face_recognition.face_encodings(rgb_small, face_locs)
+            
+            if encs and self.known_face_encodings:
+                dist = face_recognition.face_distance(self.known_face_encodings, encs[0])
+                if len(dist) > 0 and np.min(dist) <= self.FR_TOLERANCE:
+                    name = self.known_face_names[np.argmin(dist)]
+                    self.after(0, lambda n=name: setattr(self, 'identified_user', n))
+                    return
+            
+            # Kalau gak kenal
             if self.known_face_encodings:
                 self.after(0, lambda: setattr(self, 'identified_user', "UNKNOWN"))
         except Exception as e:
-            print(f"⚠️ Face recognition error: {e}")
+            print(f"⚠️ Face identification error: {e}")
         finally:
-            self.is_face_processing = False
+            self.is_identifying_face = False
 
     def process_logic_ui(self, display_frame, lms):
         h, w, _ = display_frame.shape

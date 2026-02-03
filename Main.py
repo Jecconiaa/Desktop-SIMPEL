@@ -7,7 +7,8 @@ import sys
 import time
 import random
 import threading
-from PIL import Image
+from PIL import Image, ImageTk
+import tkinter as tk
 from pyzbar.pyzbar import decode
 import urllib3
 
@@ -109,7 +110,9 @@ class AppSIMPEL(ctk.CTk):
         ctk.CTkButton(self.header, text="🚪 LOGOUT", width=100, fg_color="#dc2626", command=self.logout).pack(side="left", padx=20)
         ctk.CTkLabel(self.header, text="🛡️ SIMPEL SCANNER SYSTEM", font=("Arial", 20, "bold"), text_color="#22d3ee").pack(pady=15)
         
-        self.video_label = ctk.CTkLabel(self, text="", fg_color="black")
+        self.video_frame = ctk.CTkFrame(self, fg_color="black")
+        self.video_frame.pack(expand=True, fill="both")
+        self.video_label = tk.Label(self.video_frame, bg="black")
         self.video_label.pack(expand=True, fill="both")
 
     def reset_all_states(self):
@@ -205,8 +208,8 @@ class AppSIMPEL(ctk.CTk):
             if self.current_state not in ['PROCESSING_API', 'SUCCESS']: self.reset_all_states()
 
         self.render_ui(display_frame)
-        # Lock di 30-60 FPS (16-33ms) biar CPU gak panas
-        self.after(20, self.update_frame)
+        # Lock di 30 FPS (33ms) biar CPU gak panas
+        self.after(33, self.update_frame)
 
     def process_ui_logic(self, img, lms):
         h, w, _ = img.shape
@@ -216,11 +219,21 @@ class AppSIMPEL(ctk.CTk):
         cx = (x_min + x_max) // 2
 
         # Draw UI
+        # Draw UI
         if not self.current_qr_data:
             self.draw_text(img, "SCAN QR DULU", cx, y_min-30, (50, 50, 255))
-        elif self.current_state == 'CHALLENGE':
-            self.draw_text(img, f"TASK: {self.active_challenge}", cx, y_min-30, (255, 150, 0))
-            self.check_liveness(lms)
+        else:
+            # FIX: If QR found & state is STANDBY, switch to CHALLENGE automatically
+            if self.current_state == 'STANDBY':
+                self.current_state = 'CHALLENGE'
+            
+            if self.current_state == 'CHALLENGE':
+                self.draw_text(img, f"TASK: {self.active_challenge}", cx, y_min-30, (255, 150, 0))
+                self.check_liveness(lms)
+            elif self.current_state == 'PROCESSING_API':
+                self.draw_text(img, "MOHON TUNGGU...", cx, y_min-30, (255, 255, 0))
+            elif self.current_state == 'SUCCESS':
+                self.draw_text(img, "AKSES DITERIMA", cx, y_min-30, (0, 255, 0))
         
         if self.identified_user:
             color = (0, 255, 0) if self.identified_user != "UNKNOWN" else (0, 0, 255)
@@ -250,7 +263,11 @@ class AppSIMPEL(ctk.CTk):
                 # Resize cuma sekali pas mau ditampilin
                 img = cv2.resize(frame, (w_lbl, h_lbl), interpolation=cv2.INTER_LINEAR)
                 img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                self.video_label.configure(image=ctk.CTkImage(img, size=(w_lbl, h_lbl)))
+                
+                # OPTIMIZATION: Use ImageTk instead of CTkImage for speed
+                imgtk = ImageTk.PhotoImage(image=img)
+                self.video_label.imgtk = imgtk # Keep reference!
+                self.video_label.configure(image=imgtk)
         except: pass
 
     def qr_worker(self, frame):

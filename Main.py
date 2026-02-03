@@ -60,8 +60,10 @@ class AppSIMPEL(ctk.CTk):
         # --- Performance Flags (Secret Sauce integrated) ---
         self.is_face_processing = False
         self.last_face_scan_time = 0
-        self.face_scan_interval = 1.0  # Cooldown 1 detik biar CPU gak meledak
+        self.face_scan_interval = 1.5  # Cooldown 1 detik biar CPU gak meledak
         self.FR_TOLERANCE = 0.45       
+        
+        self.is_qr_processing = False  # 🚀 Flag buat QR thread
         
         self.frame_count = 0
         self.last_known_lms = None 
@@ -144,10 +146,11 @@ class AppSIMPEL(ctk.CTk):
         frame = cv2.flip(frame, 1)
         display_frame = frame.copy()
 
-        # 1. SCAN QR (Optimasi tiap 5 frame)
+        # 1. SCAN QR (Background Thread - Paralel dengan Face Recognition)
         if self.frame_count % 5 == 0 and self.current_state in ['STANDBY', 'LOCKING']:
-            qr = self.detect_qr(frame)
-            if qr: self.current_qr_data = qr
+            if not self.is_qr_processing:
+                self.is_qr_processing = True
+                threading.Thread(target=self.detect_qr_worker, args=(frame.copy(),), daemon=True).start()
 
         # 2. SCAN WAJAH (Background Thread - Optimized)
         now = time.time()
@@ -175,7 +178,7 @@ class AppSIMPEL(ctk.CTk):
             self.process_logic_ui(display_frame, self.last_known_lms)
 
         self.render_to_ui(display_frame)
-        self.after(10, self.update_frame)
+        self.after(16, self.update_frame)  # 16ms = ~60 FPS (lebih smooth)
 
     # --- WORKER: FACE RECOGNITION (OPTIMIZED AS REQUESTED) ---
     def recognize_face_worker(self, frame_copy):
@@ -262,6 +265,17 @@ class AppSIMPEL(ctk.CTk):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         qrs = decode(gray)
         return qrs[0].data.decode('utf-8') if qrs else None
+
+    # 🚀 WORKER: QR DETECTION (Background Thread)
+    def detect_qr_worker(self, frame_copy):
+        try:
+            qr = self.detect_qr(frame_copy)
+            if qr:
+                self.after(0, lambda q=qr: setattr(self, 'current_qr_data', q))
+        except Exception as e:
+            print(f"⚠️ QR detection error: {e}")
+        finally:
+            self.is_qr_processing = False
 
     def render_to_ui(self, frame):
         try:

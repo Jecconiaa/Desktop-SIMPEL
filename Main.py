@@ -191,16 +191,18 @@ class AppSIMPEL(ctk.CTk):
             face_locs = face_recognition.face_locations(rgb_small, model="hog")
             if face_locs:
                 encs = face_recognition.face_encodings(rgb_small, face_locs)
-                if encs:
+                if encs and self.known_face_encodings:  # ✅ CEK DATABASE KOSONG
                     dist = face_recognition.face_distance(self.known_face_encodings, encs[0])
                     if len(dist) > 0 and np.min(dist) <= self.FR_TOLERANCE:
                         name = self.known_face_names[np.argmin(dist)]
                         self.after(0, lambda n=name: setattr(self, 'identified_user', n))
                         return
             
-            # Kalau gak ada wajah atau gak kenal
-            self.after(0, lambda: setattr(self, 'identified_user', "UNKNOWN"))
-        except: pass
+            # Kalau gak ada wajah atau gak kenal (tapi database ada isinya)
+            if self.known_face_encodings:
+                self.after(0, lambda: setattr(self, 'identified_user', "UNKNOWN"))
+        except Exception as e:
+            print(f"⚠️ Face recognition error: {e}")
         finally:
             self.is_face_processing = False
 
@@ -278,9 +280,14 @@ class AppSIMPEL(ctk.CTk):
     def run_api_background(self, qr):
         try:
             res = self.api.get(f"/api/Borrowing/GetScanDataByQr/{qr}")
-            if res: self.after(0, self.handle_scan_success)
-            else: self.after(3000, self.reset_all_states)
-        except: self.after(3000, self.reset_all_states)
+            if res and isinstance(res, dict) and res.get('peminjaman_detail'):
+                self.after(0, self.handle_scan_success)
+            else:
+                print(f"⚠️ API response invalid or empty")
+                self.after(3000, self.reset_all_states)
+        except Exception as e:
+            print(f"⚠️ API error: {e}")
+            self.after(3000, self.reset_all_states)
 
     def handle_scan_success(self):
         self.current_state = 'SUCCESS'; self.after(5000, self.reset_all_states)

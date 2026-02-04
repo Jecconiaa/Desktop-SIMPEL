@@ -31,10 +31,11 @@ class AppSIMPEL(ctk.CTk):
         super().__init__()
         
         # API & Auth
+        self.auth = auth_context  # Store auth context reference
         self.api_base_url = get_api_base_url()
         self.api = init_api(self.api_base_url) 
-        if not auth_context.is_authenticated(): self.show_login_required(); return
-        self.api.set_token(auth_context.get_token())
+        if not self.auth.is_authenticated(): self.show_login_required(); return
+        self.api.set_token(self.auth.get_token())
 
         # --- Performance Config ---
         self.FR_SCALING = 0.2
@@ -323,8 +324,18 @@ class AppSIMPEL(ctk.CTk):
             self.after(2000, self.reset_all_states)
 
     def logout(self):
+        # Clear token dari auth context & hapus session file
+        self.auth.sign_out()
+        
+        # Clear token dari API client
+        self.api.clear_token()
+        
+        # Release camera
         if hasattr(self, 'cap'): self.cap.release()
-        self.destroy(); sys.exit(0)
+        
+        # Destroy & exit
+        self.destroy()
+        sys.exit(0)
 
     def show_login_required(self):
         ctk.CTkLabel(self, text="🔑 LOGIN REQUIRED").pack(expand=True)

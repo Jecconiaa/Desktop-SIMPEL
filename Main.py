@@ -282,12 +282,45 @@ class AppSIMPEL(ctk.CTk):
 
     def run_api(self, qr):
         try:
+            # Step 1: GET data peminjaman
             res = self.api.get(f"/api/Borrowing/GetScanDataByQr/{qr}")
-            if res and res.get('peminjaman_detail'):
+            
+            if not res or not res.get('peminjaman_detail'):
+                print("❌ Invalid QR or no data")
+                self.after(2000, self.reset_all_states)
+                return
+            
+            # Step 2: Check status (booked vs dipinjam)
+            status = res.get('status', '').lower()  # "booked" atau "dipinjam"
+            
+            print(f"📦 Status: {status}")
+            
+            # Step 3: Call endpoint yang sesuai
+            if status == 'dipinjam':
+                # PENGEMBALIAN (barang lagi dipinjam, mau dikembaliin)
+                final_res = self.api.post(f"/api/Borrowing/ScanQrPengembalian/{qr}")
+                print("✅ POST ScanQrPengembalian called")
+            elif status == 'booked':
+                # PEMINJAMAN (barang udah dibook, mau diambil)
+                final_res = self.api.post(f"/api/Borrowing/ScanQrPeminjaman/{qr}")
+                print("✅ POST ScanQrPeminjaman called")
+            else:
+                # Status tidak dikenal
+                print(f"⚠️ Unknown status: {status}")
+                self.after(2000, self.reset_all_states)
+                return
+            
+            # Step 4: Handle response
+            if final_res:
                 self.current_state = 'SUCCESS'
                 self.after(3000, self.reset_all_states)
-            else: self.after(2000, self.reset_all_states)
-        except: self.after(2000, self.reset_all_states)
+            else:
+                print("⚠️ POST endpoint failed")
+                self.after(2000, self.reset_all_states)
+                
+        except Exception as e:
+            print(f"❌ API Error: {e}")
+            self.after(2000, self.reset_all_states)
 
     def logout(self):
         if hasattr(self, 'cap'): self.cap.release()

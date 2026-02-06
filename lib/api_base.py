@@ -22,7 +22,7 @@ def get_api_base_url() -> str:
     
     #DEFAULT_IP = '127.0.0.1'  # Default untuk local development
     #DEFAULT_IP = '192.168.100.3'
-    DEFAULT_IP = '192.168.1.105'
+    DEFAULT_IP = '192.168.1.10'
     PORT = 5234
     
     # Untuk development (bisa detect otomatis)

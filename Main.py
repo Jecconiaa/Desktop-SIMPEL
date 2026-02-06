@@ -122,7 +122,7 @@ class AppSIMPEL(ctk.CTk):
         self.current_qr_data = None
         self.blink_count = 0
         self.eye_closed = False
-        self.active_challenge = random.choice(["Tengok Kanan", "Tengok Kiri", "Kedip 2x", "Buka Mulut"])
+        self.active_challenge = random.choice(["Tengok Kanan", "Tengok Kiri", "Buka Mulut"])
         self.face_detected_start_time = 0
         self.no_face_counter = 0
 

@@ -10,7 +10,7 @@ from PIL import Image, ImageTk
 import tkinter as tk
 from pyzbar.pyzbar import decode
 import urllib3
-
+#tes
 #Import InsightFace 
 from insightface.app import FaceAnalysis
 

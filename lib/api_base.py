@@ -22,7 +22,7 @@ def get_api_base_url() -> str:
     
     DEFAULT_IP = '172.30.241.95'  # IP Wi-Fi dari konfigurasi user
     #DEFAULT_IP = '192.168.100.3'
-    DEFAULT_IP = '10.1.15.57'
+    DEFAULT_IP = '192.168.0.214'
     PORT = 5234
     
     # Untuk development (bisa detect otomatis)

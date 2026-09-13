@@ -171,12 +171,19 @@ class AppSIMPEL(ctk.CTk):
         # Ini mencegah satu frame salah klasifikasi langsung lolos.
         self.LIVENESS_REQUIRED_STREAK = 3
 
-        # IMPORTANT: model custom ini dilatih dari gambar dataset yang langsung
-        # di-Resize(224x224), bukan dengan pipeline crop scale 2x/4x ala model
-        # MiniFASNet official. Karena deployment dengan margin=0.50 membuat input
-        # terlalu berbeda dan pada pengujian nyata terkunci sebagai SPOOF, gunakan
-        # margin 0.20 (crop ~1.4x bbox) yang lebih dekat dengan framing sebelumnya.
-        self.LIVENESS_CROP_MARGIN = 0.20
+        # ====================================================
+        # PIPELINE MODEL CAMERA-GENERALIZED TERBARU
+        # Training/deployment wajib sama:
+        # SCRFD -> padding 15% -> crop -> 112x112 -> 224x224
+        # -> ToTensor -> Normalize(mean=0.5, std=0.5).
+        # ====================================================
+        self.LIVENESS_CROP_MARGIN = 0.15
+        self.LIVENESS_PRE_RESIZE = 112
+        self.LIVENESS_INPUT_SIZE = 224
+
+        # Threshold hasil tuning model terbaru.
+        # Keputusan REAL tidak lagi memakai argmax/0.50.
+        self.LIVENESS_REAL_THRESHOLD = 0.110
 
         # Setelah kepala kembali frontal, beri waktu singkat supaya motion blur
         # akibat gerakan challenge hilang sebelum frame pertama masuk MiniFASNet.
@@ -259,32 +266,24 @@ class AppSIMPEL(ctk.CTk):
         model_dir = os.path.join(project_root, "models")
         os.makedirs(model_dir, exist_ok=True)
 
-        # Bisa memakai nama hasil save seperti:
-        # minifasnet_v1_se_epoch37.pth
-        candidates = []
+        # Pakai MODEL TERBARU secara eksplisit agar tidak salah mengambil
+        # checkpoint lama berdasarkan modified-time.
+        model_path = os.path.join(
+            model_dir,
+            "minifasnet_v1_se_camera_generalized_best.pth"
+        )
 
-        for filename in os.listdir(model_dir):
-            lower = filename.lower()
-            if (
-                lower.startswith("minifasnet_v1_se")
-                and lower.endswith(".pth")
-            ):
-                candidates.append(os.path.join(model_dir, filename))
-
-        if not candidates:
+        if not os.path.exists(model_path):
             raise FileNotFoundError(
-                "Model MiniFASNet V1 SE tidak ditemukan. "
-                "Taruh file minifasnet_v1_se*.pth di folder models/"
+                "Model terbaru tidak ditemukan: "
+                "models/minifasnet_v1_se_camera_generalized_best.pth"
             )
 
-        # Kalau ada beberapa file, pakai yang paling baru.
-        model_path = max(candidates, key=os.path.getmtime)
         self.liveness_model_path = model_path
 
-        print(f"Loading MiniFASNet V1 SE: {model_path}")
+        print(f"Loading MiniFASNet V1 SE TERBARU: {model_path}")
         print(f"Liveness device: {self.liveness_device}")
 
-        # Kompatibel dengan checkpoint lengkap maupun state_dict biasa.
         try:
             checkpoint = torch.load(
                 model_path,
@@ -308,7 +307,7 @@ class AppSIMPEL(ctk.CTk):
                 len(classes)
             )
         else:
-            # Untuk file yang isinya langsung model.state_dict()
+            # Fallback untuk checkpoint yang hanya berisi state_dict.
             state_dict = checkpoint
             classes = ["Real", "Spoof"]
             num_classes = 2
@@ -322,7 +321,7 @@ class AppSIMPEL(ctk.CTk):
         self.liveness_model.to(self.liveness_device)
         self.liveness_model.eval()
 
-        # Jangan hardcode index kelas. Ambil dari metadata checkpoint.
+        # Ambil index REAL dari metadata kelas, jangan hardcode.
         real_names = {
             "real",
             "live",
@@ -332,6 +331,7 @@ class AppSIMPEL(ctk.CTk):
             "bona-fide"
         }
 
+        self.real_class_index = None
         for idx, class_name in enumerate(self.liveness_classes):
             if str(class_name).strip().lower() in real_names:
                 self.real_class_index = idx
@@ -343,12 +343,34 @@ class AppSIMPEL(ctk.CTk):
                 f"Classes yang terbaca: {self.liveness_classes}"
             )
 
-        print("✅ MiniFASNet V1 SE Loaded")
+        # Binary Real/Spoof: index selain REAL dianggap SPOOF.
+        self.spoof_class_index = next(
+            (
+                idx for idx in range(len(self.liveness_classes))
+                if idx != self.real_class_index
+            ),
+            None
+        )
+
+        # USER REQUEST: threshold deployment dipaksa 0.110.
+        # Kalau checkpoint menyimpan threshold, hanya ditampilkan untuk debug.
+        checkpoint_threshold = None
+        if isinstance(checkpoint, dict):
+            checkpoint_threshold = checkpoint.get("real_threshold")
+
+        print("✅ MiniFASNet V1 SE Camera-Generalized Loaded")
         print(f"   Classes: {self.liveness_classes}")
         print(
             "   REAL index: "
             f"{self.real_class_index} "
             f"({self.liveness_classes[self.real_class_index]})"
+        )
+        print(f"   REAL threshold ACTIVE: {self.LIVENESS_REAL_THRESHOLD:.3f}")
+        if checkpoint_threshold is not None:
+            print(f"   Threshold checkpoint: {float(checkpoint_threshold):.3f}")
+        print(
+            "   Pipeline: SCRFD -> padding 15% -> crop -> "
+            "112x112 -> 224x224 -> Normalize(0.5)"
         )
 
     def apply_enhancement(self, frame):
@@ -582,38 +604,53 @@ class AppSIMPEL(ctk.CTk):
             self.is_identifying_face = False
 
     # ========================================================
-    # PREPROCESSING MINIFASNET
-    # Sama dengan testing transform waktu training:
-    # Resize 224x224 -> ToTensor -> Normalize(0.5, 0.5)
+    # PREPROCESSING MINIFASNET - MODEL CAMERA GENERALIZED
+    # Persis mengikuti pipeline deployment hasil training:
+    # padding 15% dilakukan pada crop_face_for_liveness()
+    # crop -> 112x112 -> 224x224 -> RGB -> Tensor -> Normalize 0.5
     # ========================================================
     def preprocess_liveness_face(self, face_crop):
         rgb = cv2.cvtColor(
             face_crop,
             cv2.COLOR_BGR2RGB
         )
+
+        # Tahap preprocessing dataset: crop wajah dibuat 112x112.
         rgb = cv2.resize(
             rgb,
-            (224, 224),
+            (self.LIVENESS_PRE_RESIZE, self.LIVENESS_PRE_RESIZE),
             interpolation=cv2.INTER_LINEAR
         )
 
+        # Tahap transform model: Resize ke 224x224.
+        rgb = cv2.resize(
+            rgb,
+            (self.LIVENESS_INPUT_SIZE, self.LIVENESS_INPUT_SIZE),
+            interpolation=cv2.INTER_LINEAR
+        )
+
+        rgb = np.ascontiguousarray(rgb)
         tensor = torch.from_numpy(rgb).float() / 255.0
         tensor = tensor.permute(2, 0, 1)
 
-        # Equivalent dengan Normalize([0.5]*3, [0.5]*3)
+        # Equivalent dengan Normalize([0.5]*3, [0.5]*3).
         tensor = (tensor - 0.5) / 0.5
 
         return tensor.unsqueeze(0).to(
             self.liveness_device
         )
 
-    def crop_face_for_liveness(self, frame, bbox, margin=0.20):
+    def crop_face_for_liveness(self, frame, bbox, margin=None):
+        if margin is None:
+            margin = self.LIVENESS_CROP_MARGIN
+
         h, w = frame.shape[:2]
         x1, y1, x2, y2 = [int(v) for v in bbox]
 
         face_w = max(1, x2 - x1)
         face_h = max(1, y2 - y1)
 
+        # Model terbaru dilatih dengan padding 15% dari bbox SCRFD.
         margin_x = int(face_w * margin)
         margin_y = int(face_h * margin)
 
@@ -646,21 +683,34 @@ class AppSIMPEL(ctk.CTk):
                 logits = self.liveness_model(input_tensor)
                 probs = torch.softmax(logits, dim=1)[0]
 
-                pred_index = int(
-                    torch.argmax(probs).item()
-                )
-                confidence = float(
-                    probs[pred_index].item()
+                # RAW argmax hanya untuk debug. Keputusan deployment
+                # memakai P(REAL) vs threshold 0.110.
+                raw_pred_index = int(torch.argmax(probs).item())
+                raw_pred_label = str(
+                    self.liveness_classes[raw_pred_index]
                 )
 
-            pred_label = str(
-                self.liveness_classes[pred_index]
-            )
+                real_probability = float(
+                    probs[self.real_class_index].item()
+                )
+
+            # MODEL TERBARU: threshold hasil tuning = 0.110.
             is_real = (
-                pred_index == self.real_class_index
+                real_probability
+                >= self.LIVENESS_REAL_THRESHOLD
             )
+
+            pred_label = "Real" if is_real else "Spoof"
+
+            # Simpan P(REAL), supaya UI tidak menampilkan confidence
+            # argmax yang bisa menyesatkan saat threshold bukan 0.50.
+            confidence = real_probability
 
             with self.face_data_lock:
+                # Buang hasil thread lama kalau state sudah bukan liveness.
+                if self.current_state != 'LIVENESS':
+                    return
+
                 self.liveness_label = pred_label
                 self.liveness_confidence = confidence
                 self.liveness_is_real = is_real
@@ -670,10 +720,14 @@ class AppSIMPEL(ctk.CTk):
                 else:
                     self.liveness_real_streak = 0
 
+                current_streak = self.liveness_real_streak
+
             print(
                 f"🛡️ Liveness: {pred_label} | "
-                f"confidence={confidence:.4f} | "
-                f"real_streak={self.liveness_real_streak}"
+                f"P(REAL)={real_probability:.4f} | "
+                f"threshold={self.LIVENESS_REAL_THRESHOLD:.3f} | "
+                f"raw_argmax={raw_pred_label} | "
+                f"real_streak={current_streak}"
             )
 
         except Exception as e:
@@ -1134,15 +1188,15 @@ class AppSIMPEL(ctk.CTk):
                     (255, 150, 0)
                 )
             else:
-                confidence_pct = (
-                    self.liveness_confidence * 70.0
+                real_probability_pct = (
+                    self.liveness_confidence * 100.0
                 )
 
                 if self.liveness_is_real:
                     color = (0, 255, 0)
                     status_text = (
                         f"LIVENESS: REAL "
-                        f"{confidence_pct:.1f}% "
+                        f"P(REAL) {real_probability_pct:.1f}% "
                         f"[{self.liveness_real_streak}/"
                         f"{self.LIVENESS_REQUIRED_STREAK}]"
                     )
@@ -1150,7 +1204,7 @@ class AppSIMPEL(ctk.CTk):
                     color = (0, 0, 255)
                     status_text = (
                         f"LIVENESS: SPOOF "
-                        f"{confidence_pct:.1f}%"
+                        f"P(REAL) {real_probability_pct:.1f}%"
                     )
 
                 self.draw_text(

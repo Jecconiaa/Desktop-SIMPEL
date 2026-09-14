@@ -1,5 +1,5 @@
 {
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI3MzAyMWI3Yi05NGU2LTQyY2EtYTQ1Ni1hZmQyNDc1NGE1YjIiLCJuYW1hYWt1biI6ImFkbWluIiwiaWRyb2xlIjoiUk9MMjMiLCJpZGFwcCI6IkFQUDAxIiwiZXhwIjoxNzg5MzIzMjgzLCJpc3MiOiJodHRwOi8vMTkyLjE2OC4wLjIxNDo1MjM0IiwiYXVkIjoiQXN0cmFUZWNoVXNlciJ9.wERYVEblBkMMJIpnkqadeJEIfbOnIvzX084-6yLHf4A",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI1NzA4YjhiYi1mMDUyLTQxOTktYWMwMS0yZTViZTZkYTI0ODAiLCJuYW1hYWt1biI6ImFkbWluIiwiaWRyb2xlIjoiUk9MMjMiLCJpZGFwcCI6IkFQUDAxIiwiZXhwIjoxNzg5Mzk5MzQ4LCJpc3MiOiJodHRwOi8vMTAuMS40LjkzOjUyMzQiLCJhdWQiOiJBc3RyYVRlY2hVc2VyIn0.yW4nxLWlJS13nq-05vDQ26po5q9Ed3o-6IG-p-kyCPg",
   "permissions": [
     "dashboard.Baca",
     "dashboard.Tulis",
@@ -35,7 +35,7 @@
     "nama": "admin",
     "app_id": "APP01",
     "role_id": "ROL23",
-    "expires_at": "2026-09-13T18:14:43.1278048Z",
+    "expires_at": "2026-09-14T15:22:28.0483439Z",
     "list_aplikasi": [
       {
         "namaAplikasi": "Sistem Peminjaman Alat",

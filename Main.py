@@ -403,36 +403,131 @@ class AppSIMPEL(ctk.CTk):
 
     def load_known_faces(self):
         path = os.path.join(project_root, "assets")
+        local_count = 0
 
-        if not os.path.exists(path):
-            return
-
-        for f in os.listdir(path):
-            if f.lower().endswith((".jpg", ".png", ".jpeg")):
-                img = cv2.imread(os.path.join(path, f))
-                enhanced, _ = self.apply_enhancement(img)
-                rgb = cv2.cvtColor(
-                    enhanced,
-                    cv2.COLOR_BGR2RGB
-                )
-
-                # Ekstrak fitur wajah pake InsightFace
-                faces = self.face_app.get(rgb)
-
-                if faces:
-                    self.known_face_encodings.append(
-                        faces[0].normed_embedding
-                    )
-                    self.known_face_names.append(
+        # Database lokal tetap dipertahankan sebagai fallback bila API
+        # tidak tersedia atau foto mahasiswa belum berhasil dimuat.
+        if os.path.exists(path):
+            for f in os.listdir(path):
+                if f.lower().endswith((".jpg", ".png", ".jpeg")):
+                    img = cv2.imread(os.path.join(path, f))
+                    display_name = (
                         os.path.splitext(f)[0]
                         .replace("_", " ")
                         .title()
                     )
+                    if self.add_known_face(img, display_name):
+                        local_count += 1
+
+        api_count = self.load_registered_faces_from_api()
 
         print(
-            f"✅ DB Loaded: "
+            f"✅ Local face DB: {local_count} faces"
+        )
+        print(
+            f"✅ Registered student faces from API: {api_count} faces"
+        )
+        print(
+            f"✅ Total face DB loaded: "
             f"{len(self.known_face_names)} faces"
         )
+
+    def add_known_face(self, image_bgr, display_name):
+        """Buat embedding InsightFace dari satu foto BGR."""
+        if image_bgr is None:
+            return False
+
+        try:
+            enhanced, _ = self.apply_enhancement(image_bgr)
+            rgb = cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB)
+            faces = self.face_app.get(rgb)
+
+            if not faces:
+                print(f"⚠️ Wajah tidak ditemukan pada foto: {display_name}")
+                return False
+
+            # Jika sebuah foto punya lebih dari satu wajah, gunakan wajah
+            # terbesar supaya embedding yang tersimpan tetap konsisten.
+            main_face = max(
+                faces,
+                key=lambda face: (
+                    (face.bbox[2] - face.bbox[0])
+                    * (face.bbox[3] - face.bbox[1])
+                )
+            )
+            self.known_face_encodings.append(main_face.normed_embedding)
+            self.known_face_names.append(display_name)
+            return True
+        except Exception as error:
+            print(f"⚠️ Gagal memproses foto {display_name}: {error}")
+            return False
+
+    def load_registered_faces_from_api(self):
+        """Ambil foto mahasiswa aktif hasil registrasi mobile dari backend."""
+        try:
+            response = self.api.get("/api/mahasiswa/admin/list")
+            students = response.get("data", []) if response else []
+        except Exception as error:
+            print(
+                "⚠️ Foto mahasiswa dari API tidak dapat dimuat. "
+                f"Scanner tetap memakai assets lokal. Detail: {error}"
+            )
+            return 0
+
+        http = urllib3.PoolManager()
+        loaded_count = 0
+
+        for student in students:
+            # Mahasiswa yang belum diverifikasi admin tidak boleh dipakai
+            # untuk autentikasi desktop.
+            if not student.get("isActive", False):
+                continue
+
+            photo_url = (
+                student.get("imagePath")
+                or student.get("fotoPath")
+            )
+            if not photo_url:
+                continue
+
+            photo_url = str(photo_url)
+            lowered_url = photo_url.lower().split("?", 1)[0]
+            if lowered_url.endswith((".mp4", ".webm", ".mov")):
+                print(
+                    "⚠️ Foto profil belum tersedia untuk "
+                    f"{student.get('nama', student.get('nim', 'mahasiswa'))}"
+                )
+                continue
+
+            try:
+                image_response = http.request(
+                    "GET",
+                    photo_url,
+                    timeout=urllib3.Timeout(connect=5.0, read=10.0),
+                )
+                if image_response.status != 200:
+                    print(
+                        f"⚠️ Gagal mengunduh foto {student.get('nim', '-')}: "
+                        f"HTTP {image_response.status}"
+                    )
+                    continue
+
+                image_bytes = np.frombuffer(image_response.data, np.uint8)
+                image_bgr = cv2.imdecode(image_bytes, cv2.IMREAD_COLOR)
+                display_name = (
+                    str(student.get("nama") or student.get("nim") or "Mahasiswa")
+                    .strip()
+                )
+
+                if self.add_known_face(image_bgr, display_name):
+                    loaded_count += 1
+            except Exception as error:
+                print(
+                    f"⚠️ Gagal memuat foto mahasiswa "
+                    f"{student.get('nim', '-')}: {error}"
+                )
+
+        return loaded_count
 
     def setup_ui(self):
         self.header = ctk.CTkFrame(

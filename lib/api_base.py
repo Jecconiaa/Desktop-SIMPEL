@@ -20,9 +20,17 @@ def get_api_base_url() -> str:
     # DEFAULT_IP = '192.168.207.1'  # Hotspot
     # DEFAULT_IP = '172.31.16.1'    # WiFi lainnya
     
-    DEFAULT_IP = '172.30.241.95'  # IP Wi-Fi dari konfigurasi user
-    #DEFAULT_IP = '192.168.100.3'
-    DEFAULT_IP = '10.1.4.93'
+    # === IP Histori Lu ===
+    # DEFAULT_IP = '172.30.241.95'  # IP Wi-Fi dari konfigurasi user
+    # DEFAULT_IP = '192.168.100.3'
+    
+    # === IP Histori Temen Lu ===
+    # IP laptop yang menjalankan backend.
+    # DEFAULT_IP = '10.1.4.93'
+    
+    # === IP KAMPUS LU YANG AKTIF SEKARANG ===
+    DEFAULT_IP = '10.1.15.57'
+    
     PORT = 5234
     
     # Untuk development (bisa detect otomatis)

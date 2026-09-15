@@ -16,8 +16,6 @@ import torch.nn as nn
 # Import InsightFace
 from insightface.app import FaceAnalysis
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)

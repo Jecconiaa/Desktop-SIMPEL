@@ -14,6 +14,7 @@ if project_root not in sys.path:
 try:
     from app.auth.login import LoginFrame
     from context.AuthContext import auth_context
+    from lib.api_base import get_api_base_url
     print("✅ Module Auth & Login berhasil di-load")
 except ImportError as e:
     print(f"❌ Gagal load module: {e}")
@@ -44,7 +45,7 @@ class LoginApp:
         self.login_frame.pack(expand=True, fill="both", padx=20, pady=20)
         
         print("\n🚀 SIMPEL Login System Ready!")
-        print("📡 Server Target: http://127.0.0.1:5234")
+        print(f"📡 Server Target: {get_api_base_url()}")
         print("="*50)
 
     def _center_window(self, width, height):

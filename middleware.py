@@ -5,18 +5,16 @@ Middleware untuk handle CORS dan headers khusus desktop app.
 import functools
 import requests
 from typing import Dict, Any, Callable, Optional
-import urllib3
 import json
-
-# Matiin SSL warning
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class DesktopMiddleware:
     """Middleware untuk desktop app dengan headers khusus"""
     
     def __init__(self):
         self.session = requests.Session()
-        self.session.verify = False  # Penting untuk localhost
+        # Production memakai HTTPS valid. Jangan menonaktifkan pemeriksaan
+        # sertifikat secara global karena itu membuat koneksi rentan MITM.
+        self.session.verify = True
         self._setup_headers()
         
         # Setup hooks untuk debugging
@@ -44,6 +42,10 @@ class DesktopMiddleware:
         """Tambah custom header"""
         self.session.headers[key] = value
         print(f"➕ Added header: {key}: {value}")
+
+    def configure_base_url(self, base_url: str):
+        """Simpan base URL diagnostik tanpa mengubah verifikasi HTTPS."""
+        self.add_header("X-Base-URL", base_url.rstrip("/"))
     
     def remove_header(self, key: str):
         """Hapus header"""
@@ -207,7 +209,9 @@ def test_middleware():
         ("Cleared headers", lambda m: m.clear_headers()),
     ]
     
-    test_url = "http://127.0.0.1:5234/api/Auth/login"
+    from lib.api_base import get_api_endpoint
+
+    test_url = get_api_endpoint("/api/Auth/login")
     payload = {
         "username": "admin",
         "password": "asd",

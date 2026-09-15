@@ -22,7 +22,7 @@ except ImportError:
     class SimpleMiddleware:
         def __init__(self):
             self.session = requests.Session()
-            self.session.verify = False
+            self.session.verify = True
             self.session.headers.update({
                 "Content-Type": "application/json",
                 "Accept": "application/json",
@@ -39,6 +39,9 @@ except ImportError:
         
         def add_header(self, key, value):
             self.session.headers[key] = value
+
+        def configure_base_url(self, base_url):
+            self.add_header("X-Base-URL", base_url.rstrip("/"))
         
         def remove_header(self, key):
             self.session.headers.pop(key, None)
@@ -54,7 +57,7 @@ class ApiClient:
         Initialize API client dengan middleware.
         
         Args:
-            base_url: Base URL API (contoh: "http://127.0.0.1:5234")
+            base_url: Base URL API (contoh: "https://api.simpel-p4.tech")
             timeout: Timeout dalam detik
         """
         self.base_url = base_url.rstrip('/')
@@ -62,7 +65,7 @@ class ApiClient:
         self._token: Optional[str] = None
         
         # Setup middleware dengan base URL yang benar
-        middleware.add_header("X-Base-URL", self.base_url)
+        middleware.configure_base_url(self.base_url)
         
         print(f"🔧 API Client initialized: {self.base_url}")
         

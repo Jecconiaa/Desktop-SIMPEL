@@ -29,7 +29,7 @@ def get_api_base_url() -> str:
     # DEFAULT_IP = '10.1.4.93'
     
     # === IP KAMPUS LU YANG AKTIF SEKARANG ===
-    DEFAULT_IP = '10.1.15.57'
+    DEFAULT_IP = '10.1.4.93'
     
     PORT = 5234
     

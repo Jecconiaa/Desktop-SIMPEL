@@ -165,7 +165,15 @@ class DesktopMiddleware:
             raise
     
     def post(self, url: str, data: Dict = None, **kwargs) -> requests.Response:
-        """POST request dengan middleware"""
+        """POST request dengan middleware.
+
+        Endpoint scan QR tidak membutuhkan request body. Jangan kirim
+        ``json=None`` karena pada beberapa versi requests hal tersebut dapat
+        gagal saat request dipersiapkan (``NoneType is not iterable``).
+        """
+        if data is None:
+            return self.request('POST', url, **kwargs)
+
         return self.request('POST', url, json=data, **kwargs)
     
     def get(self, url: str, **kwargs) -> requests.Response:
